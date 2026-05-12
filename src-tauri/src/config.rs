@@ -14,7 +14,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            hotkey: "Alt+Q".into(),
+            hotkey: "Alt+Backquote".into(),
             refresh_interval_secs: 5,
             start_minimized: true,
         }
@@ -172,7 +172,14 @@ impl Config {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(&path)?;
-        Ok(toml::from_str(&s)?)
+        let mut cfg: Self = toml::from_str(&s)?;
+        // 老默认热键自动迁移到新默认（Alt+Q → Alt+Backquote），仅对精确匹配的老默认值
+        if cfg.settings.hotkey == "Alt+Q" {
+            cfg.settings.hotkey = "Alt+Backquote".into();
+            // 写回，避免下次再迁移
+            let _ = cfg.save();
+        }
+        Ok(cfg)
     }
 
     pub fn save(&self) -> anyhow::Result<()> {

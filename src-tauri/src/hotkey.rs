@@ -1,5 +1,5 @@
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::tray::toggle_main;
 
@@ -46,8 +46,11 @@ pub fn register<R: Runtime>(app: &AppHandle<R>, accel: &str) -> tauri::Result<()
     let normalized = normalize_accel(accel);
 
     app.global_shortcut()
-        .on_shortcut(normalized.as_str(), move |_app, _shortcut, _event| {
-            toggle_main(&app_clone);
+        .on_shortcut(normalized.as_str(), move |_app, _shortcut, event| {
+            // 只在"按下"边沿触发；忽略松开事件，避免一次按键触发两次 toggle
+            if event.state == ShortcutState::Pressed {
+                toggle_main(&app_clone);
+            }
         })
         .map_err(|e| {
             eprintln!(

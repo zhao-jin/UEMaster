@@ -49,14 +49,33 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+/// 智能切换主窗口：
+/// - 最小化 → 还原 + 聚焦
+/// - 隐藏（托盘）→ 显示 + 聚焦
+/// - 已可见但失焦 → 强制置顶聚焦
+/// - 已可见且聚焦 → 隐藏到托盘
 pub fn toggle_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
-        if win.is_visible().unwrap_or(false) {
+        let visible = win.is_visible().unwrap_or(false);
+        let minimized = win.is_minimized().unwrap_or(false);
+        let focused = win.is_focused().unwrap_or(false);
+
+        if visible && !minimized && focused {
+            // 真正的"前台可见"才隐藏到托盘
             let _ = win.hide();
         } else {
-            let _ = win.show();
+            // 其他所有情况：恢复 + 强制前置 + 聚焦
+            if !visible {
+                let _ = win.show();
+            }
+            if minimized {
+                let _ = win.unminimize();
+            }
+            // set_focus 在某些情况下不会把窗口拉到前台，
+            // 临时 always-on-top 翻转一次可以可靠地把窗口置顶
             let _ = win.set_focus();
-            let _ = win.unminimize();
+            let _ = win.set_always_on_top(true);
+            let _ = win.set_always_on_top(false);
         }
     }
 }
@@ -64,8 +83,10 @@ pub fn toggle_main<R: Runtime>(app: &AppHandle<R>) {
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
-        let _ = win.set_focus();
         let _ = win.unminimize();
+        let _ = win.set_focus();
+        let _ = win.set_always_on_top(true);
+        let _ = win.set_always_on_top(false);
     }
 }
 

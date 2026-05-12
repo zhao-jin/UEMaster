@@ -8,7 +8,7 @@ interface Props {
 }
 
 const REFRESH_PRESETS = [1, 2, 5, 10, 30];
-const HOTKEY_PRESETS = ["Alt+KeyQ", "Alt+Backquote", "Ctrl+Alt+KeyU", "Ctrl+Shift+KeyU"];
+const HOTKEY_PRESETS = ["Alt+Backquote", "Alt+KeyQ", "Ctrl+Alt+KeyU", "Ctrl+Shift+KeyU"];
 
 /** 把内部规范名（KeyQ / Digit5 / Backquote）转成显示用的友好名（Q / 5 / `） */
 function prettyAccel(accel: string): string {
@@ -93,7 +93,7 @@ function eventToAccel(e: KeyboardEvent): string | null {
 export function SettingsDialog({ onClose }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [refreshSecs, setRefreshSecs] = useState<number>(5);
-  const [hotkey, setHotkey] = useState<string>("Alt+Q");
+  const [hotkey, setHotkey] = useState<string>("Alt+Backquote");
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedHint, setSavedHint] = useState(false);
@@ -107,7 +107,7 @@ export function SettingsDialog({ onClose }: Props) {
         const s = await getSettings();
         setSettings(s);
         setRefreshSecs(s.refresh_interval_secs || 5);
-        setHotkey(s.hotkey || "Alt+Q");
+        setHotkey(s.hotkey || "Alt+Backquote");
       } catch (e) {
         console.error("getSettings failed", e);
       }
@@ -269,7 +269,7 @@ export function SettingsDialog({ onClose }: Props) {
             </div>
             <div className="mt-2 text-[11px] text-text-dim leading-relaxed">
               Click the box and press a key combination (must include Ctrl / Alt / Shift / Super).
-              Default: <span className="font-mono text-text-secondary">Alt+Q</span>.
+              Default: <span className="font-mono text-text-secondary">Alt+`</span>.
             </div>
           </section>
 
