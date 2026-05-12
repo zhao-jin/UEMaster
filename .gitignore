@@ -22,3 +22,5 @@ tsconfig.tsbuildinfo
 tsconfig.node.tsbuildinfo
 vite.config.d.ts
 vite.config.js
+dist-portable/UEMaster-0.1.0-portable-win64.zip
+dist-portable/UEMaster-0.1.0-portable-win64/config.toml
