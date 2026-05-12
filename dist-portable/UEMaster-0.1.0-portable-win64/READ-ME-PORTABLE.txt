@@ -1,0 +1,43 @@
+UEMaster - Portable Edition (v0.1.0, win64)
+============================================
+
+How to use
+----------
+1. Double-click  UEMaster.exe.
+   The main window pops up automatically on first run.
+2. After that the window is hidden to the system tray by default.
+   - Press  Alt+Q  globally to toggle the window
+     (configurable in Settings).
+   - Or right-click the tray icon in the notification area.
+
+Tips
+----
+- Click "+ New" to launch a UE process from a saved project preset.
+- Saved profiles (with a Name) appear:
+   * in the Quick-launch bar next to "+ New"
+   * in the right-side panel when no process row is selected
+- Drag the splitter to resize the details panel.
+- The performance charts retain the full process lifetime; use the
+  time brush below the charts to zoom into any range.
+
+Data location
+-------------
+Configuration (project presets / launch history / hotkey / refresh
+interval) is stored next to the .exe by default:
+
+    UEMaster.exe
+    config.toml      <-- created on first launch
+
+If the exe directory is read-only (e.g. Program Files), the app
+falls back to %APPDATA%\UEMaster\config.toml automatically.
+A previous APPDATA config is migrated over on first run.
+
+Requirements
+------------
+- Windows 10 / 11 (x64)
+- Microsoft Edge WebView2 Runtime
+  (pre-installed on virtually all Win10/11 systems)
+
+Source code
+-----------
+https://github.com/zhao-jin/UEMaster
