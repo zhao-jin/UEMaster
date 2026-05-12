@@ -1,5 +1,5 @@
 [settings]
-hotkey = "Ctrl+Alt+U"
+hotkey = "Alt+Backquote"
 refresh_interval_secs = 5
 start_minimized = true
 
