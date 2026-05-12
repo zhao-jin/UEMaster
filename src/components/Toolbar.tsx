@@ -40,11 +40,10 @@ export function Toolbar(p: Props) {
   // 列表变化（loading 切换）后顺带刷新一次，捕获新启动产生的历史
   useEffect(() => { if (!p.loading) reload(); }, [p.loading]);
 
-  // 取 Top-7 + 仅显示有 label 的（无名条目作为快捷意义不大）
+  // 全部带 Name 的历史，按 frecency 排序；不再做上限截断（外层 flex 容器自带横向滚动）
   const quick = [...history]
     .filter(h => (h.label ?? "").trim().length > 0)
-    .sort((a, b) => score(b) - score(a))
-    .slice(0, 7);
+    .sort((a, b) => score(b) - score(a));
 
   const projName = (id: string) => projects.find(x => x.id === id)?.name ?? "?";
 
@@ -87,9 +86,10 @@ export function Toolbar(p: Props) {
         <Plus size={14} /> New
       </button>
 
-      {/* 快速启动条 —— 最常用的 7 条带 Name 的历史 */}
+      {/* 快速启动条 —— 全部带 Name 的历史，按 frecency 排序；超出宽度时横向滚动 */}
       {quick.length > 0 && (
-        <div className="flex items-center gap-1 ml-1 pl-2 border-l border-border-subtle/60 overflow-hidden">
+        <div className="flex-1 min-w-0 flex items-center gap-1 ml-1 pl-2 border-l border-border-subtle/60
+                        overflow-x-auto overflow-y-hidden quick-scroll">
           {quick.map(h => {
             const isBusy = busyId === h.id;
             return (
@@ -126,7 +126,8 @@ export function Toolbar(p: Props) {
         </div>
       )}
 
-      <div className="flex-1" />
+      {/* 没有快捷启动条时也要把右上按钮推到右侧 */}
+      {quick.length === 0 && <div className="flex-1" />}
 
       {/* 右上：Settings / Refresh / Toggle details */}
       <button

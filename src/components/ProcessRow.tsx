@@ -85,6 +85,7 @@ export function ProcessRow({ process: p, selected, onSelect, onAfterAction }: Pr
 
   return (
     <div
+      data-process-row
       onClick={onSelect}
       className={clsx(
         "group relative grid",

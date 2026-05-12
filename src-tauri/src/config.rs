@@ -95,21 +95,79 @@ pub struct Config {
     pub history: Vec<LaunchHistory>,
 }
 
-pub fn config_dir() -> PathBuf {
+/// 配置查找规则（按优先级）：
+///  1) **exe 所在目录**（portable 模式，便于 U 盘 / 整目录搬迁）。
+///     即使首次运行时该目录不存在 config.toml，也会优先用作写入目标——只要可写。
+///  2) %APPDATA%\UEMaster（兜底，作为系统级用户配置）
+///
+/// 选择策略在首次调用时确定一次并缓存：
+///  - 如果 exe 同目录已存在 config.toml → 直接用（即便目录只读也能 load）
+///  - 否则尝试在 exe 同目录写一个空文件做"可写探测"；通过则用它，否则回退 APPDATA
+fn determine_config_path() -> PathBuf {
+    // exe 同目录候选
+    let exe_side: Option<PathBuf> = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("config.toml")));
+
+    if let Some(side) = exe_side {
+        // a) 已存在 → 直接用
+        if side.exists() {
+            return side;
+        }
+        // b) 探测写权限：试着 create + 立即删除
+        if let Some(parent) = side.parent() {
+            let probe = parent.join(".uemaster_write_probe");
+            if std::fs::write(&probe, b"").is_ok() {
+                let _ = std::fs::remove_file(&probe);
+                return side;
+            }
+        }
+    }
+
+    // c) 兜底：APPDATA\UEMaster\config.toml
     let dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("UEMaster");
     let _ = std::fs::create_dir_all(&dir);
-    dir
+    dir.join("config.toml")
+}
+
+/// 历史 APPDATA 路径（用于一次性迁移）
+fn legacy_appdata_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("UEMaster")
+        .join("config.toml")
 }
 
 pub fn config_path() -> PathBuf {
-    config_dir().join("config.toml")
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+    CACHE.get_or_init(determine_config_path).clone()
+}
+
+/// 兼容旧调用点（目前未被引用，留作公开 API 备用）
+#[allow(dead_code)]
+pub fn config_dir() -> PathBuf {
+    config_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let path = config_path();
+        // 首次启动迁移：当前 path 还不存在，但 APPDATA 旧路径有 → 复制过来
+        if !path.exists() {
+            let legacy = legacy_appdata_path();
+            if legacy.exists() && legacy != path {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::copy(&legacy, &path);
+            }
+        }
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -119,7 +177,11 @@ impl Config {
 
     pub fn save(&self) -> anyhow::Result<()> {
         let s = toml::to_string_pretty(self)?;
-        std::fs::write(config_path(), s)?;
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(path, s)?;
         Ok(())
     }
 

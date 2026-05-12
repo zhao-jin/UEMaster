@@ -43,6 +43,11 @@ html, body, #root {
   background: rgba(0, 229, 255, 0.35);
 }
 
+/* 工具栏快速启动条：更细的滚动条 */
+.quick-scroll::-webkit-scrollbar { height: 4px; }
+.quick-scroll::-webkit-scrollbar-thumb { background: rgba(0, 229, 255, 0.10); }
+.quick-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 229, 255, 0.30); }
+
 /* 拖拽区域 */
 .drag-region { -webkit-app-region: drag; app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; app-region: no-drag; }

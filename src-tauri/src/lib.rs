@@ -61,6 +61,8 @@ pub(crate) fn sync_history_labels(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 首次运行判断：config.toml 不存在 = 全新安装，首次启动直接显示主窗口
+    let is_first_run = !config::config_path().exists();
     let cfg = config::Config::load().unwrap_or_default();
     let initial_refresh = cfg.settings.refresh_interval_secs.max(1);
     let cfg = Arc::new(Mutex::new(cfg));
@@ -104,9 +106,14 @@ pub fn run() {
             let hk = cfg.lock().settings.hotkey.clone();
             hotkey::register(app.handle(), &hk)?;
 
-            // 主窗口视觉效果（Mica/Acrylic）
+            // 主窗口视觉效果（Mica/Acrylic）；首次运行时直接显示并居中
             if let Some(win) = app.get_webview_window("main") {
                 window_fx::apply_effects(&win);
+                if is_first_run {
+                    let _ = win.center();
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
             }
 
             // 启动时同步一次历史 label → monitor

@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+declare const process: { env: Record<string, string | undefined> };
+
 // Tauri expects a fixed port, fail if not available
 const host = process.env.TAURI_DEV_HOST;
 

@@ -47,12 +47,8 @@ export function RangeBrush({
     return () => ro.disconnect();
   }, []);
 
-  // 索引 ↔ 像素的换算
+  // 索引 → 像素
   const idxToX = (i: number) => (total <= 1 ? 0 : (i / (total - 1)) * w);
-  const xToIdx = (x: number) => {
-    if (total <= 1) return 0;
-    return Math.round((x / w) * (total - 1));
-  };
 
   const xL = Math.max(0, Math.min(w, idxToX(start)));
   const xR = Math.max(0, Math.min(w, idxToX(end)));

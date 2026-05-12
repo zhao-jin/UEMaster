@@ -8,12 +8,33 @@ interface Props {
 }
 
 const REFRESH_PRESETS = [1, 2, 5, 10, 30];
-const HOTKEY_PRESETS = ["Alt+Q", "Alt+`", "Ctrl+Alt+U", "Ctrl+Shift+U"];
+const HOTKEY_PRESETS = ["Alt+KeyQ", "Alt+Backquote", "Ctrl+Alt+KeyU", "Ctrl+Shift+KeyU"];
+
+/** 把内部规范名（KeyQ / Digit5 / Backquote）转成显示用的友好名（Q / 5 / `） */
+function prettyAccel(accel: string): string {
+  if (!accel) return "";
+  return accel
+    .split("+")
+    .map(t => {
+      const m1 = /^Key([A-Z])$/.exec(t);
+      if (m1) return m1[1];
+      const m2 = /^Digit(\d)$/.exec(t);
+      if (m2) return m2[1];
+      const map: Record<string, string> = {
+        Backquote: "`", Backslash: "\\", BracketLeft: "[", BracketRight: "]",
+        Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'",
+        Minus: "-", Equal: "=",
+      };
+      return map[t] ?? t;
+    })
+    .join("+");
+}
 
 /**
  * 把浏览器 KeyboardEvent 转成 Tauri global-shortcut accelerator 字符串。
- * 例如 Alt + Q  → "Alt+Q"，Ctrl + Shift + U → "Ctrl+Shift+U"。
- * 未按下任何修饰键时返回空，避免误注册裸字母键。
+ * 优先使用 e.code（不受输入法/键盘布局影响），fallback 用 e.key。
+ * 例：Alt+Q → "Alt+KeyQ"，Alt+` → "Alt+Backquote"，Ctrl+Shift+5 → "Ctrl+Shift+Digit5"。
+ * 未按下任何修饰键时返回 null，避免误注册裸字母键。
  */
 function eventToAccel(e: KeyboardEvent): string | null {
   const parts: string[] = [];
@@ -22,28 +43,48 @@ function eventToAccel(e: KeyboardEvent): string | null {
   if (e.shiftKey) parts.push("Shift");
   if (e.metaKey) parts.push("Super");
 
-  // 主键：忽略单纯的修饰键
+  // 忽略单纯的修饰键
   const k = e.key;
-  if (["Control", "Alt", "Shift", "Meta", "OS"].includes(k)) return null;
+  if (["Control", "Alt", "Shift", "Meta", "OS", "Process", "Dead", "Unidentified"].includes(k)) {
+    return null;
+  }
 
-  // 规范化主键名
-  let main = k.length === 1 ? k.toUpperCase() : k;
-  // 部分按键名 Tauri 可识别原样：F1-F12, Space, Tab, Enter, Backspace, Escape, Insert, Delete, Home, End, PageUp, PageDown, ArrowXxx
-  // 非英文键就直接用 e.code 兜底（如 Backquote → `）
-  const codeMap: Record<string, string> = {
-    Backquote: "`",
-    Minus: "-",
-    Equal: "=",
-    BracketLeft: "[",
-    BracketRight: "]",
-    Backslash: "\\",
-    Semicolon: ";",
-    Quote: "'",
-    Comma: ",",
-    Period: ".",
-    Slash: "/",
-  };
-  if (codeMap[e.code]) main = codeMap[e.code];
+  // 优先 e.code（W3C 物理键）：KeyA / Digit5 / Backquote / F1 / Space / ArrowUp...
+  // 这些值正好就是 global-hotkey 解析器期望的 token
+  let main: string | null = null;
+  const code = e.code;
+  if (code) {
+    if (/^Key[A-Z]$/.test(code)) main = code;             // KeyA..KeyZ
+    else if (/^Digit\d$/.test(code)) main = code;          // Digit0..Digit9
+    else if (/^Numpad\d$/.test(code)) main = code;
+    else if (/^F\d{1,2}$/.test(code)) main = code;         // F1..F24
+    else if (
+      [
+        "Backquote", "Backslash", "BracketLeft", "BracketRight",
+        "Comma", "Period", "Slash", "Semicolon", "Quote", "Minus", "Equal",
+        "Space", "Tab", "Enter", "Escape", "Backspace",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Home", "End", "PageUp", "PageDown", "Insert", "Delete",
+        "CapsLock", "PrintScreen", "ScrollLock", "Pause",
+        "NumpadAdd", "NumpadSubtract", "NumpadMultiply", "NumpadDivide",
+        "NumpadDecimal", "NumpadEnter", "NumpadEqual",
+      ].includes(code)
+    ) {
+      main = code;
+    }
+  }
+
+  // fallback：e.key 单字符 → 大写
+  if (!main) {
+    if (k.length === 1) {
+      const c = k.toUpperCase();
+      if (/[A-Z]/.test(c)) main = `Key${c}`;
+      else if (/[0-9]/.test(c)) main = `Digit${c}`;
+      else main = c; // 让 Rust 端 normalize_accel 兜底
+    } else {
+      main = k;
+    }
+  }
 
   if (parts.length === 0) return null; // 必须带至少一个修饰键
   return parts.concat(main).join("+");
@@ -200,7 +241,7 @@ export function SettingsDialog({ onClose }: Props) {
                 {recording ? (
                   <span className="text-accent-cyan animate-pulse">Press key combination…</span>
                 ) : (
-                  <span>{hotkey || "(none)"}</span>
+                  <span>{hotkey ? prettyAccel(hotkey) : "(none)"}</span>
                 )}
               </div>
               <button
@@ -222,7 +263,7 @@ export function SettingsDialog({ onClose }: Props) {
                                 ? "bg-accent-cyan/20 border border-accent-cyan/50 text-accent-cyan"
                                 : "bg-white/5 hover:bg-accent-cyan/10 text-text-dim hover:text-accent-cyan border border-transparent"}`}
                 >
-                  {k}
+                  {prettyAccel(k)}
                 </button>
               ))}
             </div>

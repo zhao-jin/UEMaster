@@ -186,16 +186,21 @@ export default function App() {
     }
   }, [processes, selectedPid]);
 
-  useEffect(() => {
-    if (selectedPid == null && processes.length > 0) {
-      setSelectedPid(processes[0].pid);
-    }
-  }, [processes, selectedPid]);
+
+
+  // 主面板（左半边）任何非交互空白处点击都反选
+  // 涵盖 Toolbar 空白、行外、StatBar 空白等
+  const handleMainBlankClick = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("button, a, input, textarea, select, [data-process-row], [data-no-deselect]")) return;
+    setSelectedPid(null);
+  };
 
   return (
     <div className="relative w-full h-full flex app-shell rounded-xl overflow-hidden tech-border">
       <div
         ref={mainRef}
+        onClick={handleMainBlankClick}
         className={`${mainLockWidth != null ? "shrink-0" : "flex-1"} min-w-0 flex flex-col h-full`}
         style={mainLockWidth != null ? { width: mainLockWidth } : undefined}
       >
@@ -214,6 +219,7 @@ export default function App() {
             processes={processes}
             selectedPid={selectedPid}
             onSelect={(pid) => { setSelectedPid(pid); if (!detailOpen) toggleDetail(); }}
+            onClickOutsideRow={() => setSelectedPid(null)}
             onAfterAction={refresh}
           />
         </div>
@@ -234,6 +240,8 @@ export default function App() {
         open={detailOpen}
         width={detailWidth}
         onClose={toggleDetail}
+        onLaunched={refresh}
+        onBlankClick={() => setSelectedPid(null)}
       />
 
       {showNew && (
