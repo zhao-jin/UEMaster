@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config::{LaunchHistory, LaunchMode, ProjectPreset, Settings};
 use crate::launcher::{build_plan, spawn, LaunchOptions};
-use crate::process::UeProcessInfo;
+use crate::process::{SystemStats, UeProcessInfo};
 use crate::AppState;
 
 type Cmd<T> = Result<T, String>;
@@ -17,6 +17,11 @@ fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
 #[tauri::command]
 pub fn list_processes(state: State<'_, AppState>) -> Cmd<Vec<UeProcessInfo>> {
     Ok(state.monitor.snapshot())
+}
+
+#[tauri::command]
+pub fn get_system_stats(state: State<'_, AppState>) -> Cmd<SystemStats> {
+    Ok(state.monitor.system_stats())
 }
 
 #[tauri::command]

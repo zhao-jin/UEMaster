@@ -10,6 +10,8 @@ use super::identify::{identify, UeKind};
 use super::iocounters::read_io_bytes;
 #[cfg(windows)]
 use super::cmdline::full_cmdline_for_pid;
+#[cfg(windows)]
+use super::gpu::GpuSampler;
 
 /// 历史样本数量上限（足够长：@2s 是 4 小时，@5s 是 10 小时）。
 /// 进程终止后整个 PerProcState 会被回收，单进程峰值内存约 7200 × 3 × 4B ≈ 86KB
@@ -98,6 +100,25 @@ pub struct Monitor {
     history_labels: Mutex<Vec<(String, String)>>,
     /// history_labels 的版本号；每次 set 时 +1，用于让缓存失效
     history_label_version: std::sync::atomic::AtomicU64,
+    /// 全局指标的独立 sysinfo 实例：与 process 表分开避免 process refresh 干扰 cpu/mem 节奏
+    global_sys: Mutex<System>,
+    #[cfg(windows)]
+    gpu: GpuSampler,
+}
+
+/// 全局机器指标，喂给底部 StatBar
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SystemStats {
+    /// 整机 CPU 占用 %（0..=100）
+    pub cpu_percent: f32,
+    /// 已用内存 MB
+    pub mem_used_mb: u64,
+    /// 总内存 MB
+    pub mem_total_mb: u64,
+    /// 内存占比 %（0..=100）
+    pub mem_percent: f32,
+    /// GPU 占用 %（0..=100）；不支持时为 None
+    pub gpu_percent: Option<f32>,
 }
 
 impl Monitor {
@@ -119,6 +140,41 @@ impl Monitor {
             labels: Mutex::new(HashMap::new()),
             history_labels: Mutex::new(Vec::new()),
             history_label_version: std::sync::atomic::AtomicU64::new(0),
+            global_sys: Mutex::new(System::new()),
+            #[cfg(windows)]
+            gpu: GpuSampler::new(),
+        }
+    }
+
+    /// 采样整机 CPU / 内存 / GPU 占用
+    pub fn system_stats(&self) -> SystemStats {
+        let mut g = self.global_sys.lock();
+        // CPU 需要两次刷新之间隔一段时间才有意义；调用方按 ~1s+ 节奏调用即可
+        g.refresh_cpu_usage();
+        g.refresh_memory();
+        let cpu_percent = g.global_cpu_usage().clamp(0.0, 100.0);
+        let total = g.total_memory(); // bytes
+        let used = g.used_memory();
+        let mem_total_mb = total / 1024 / 1024;
+        let mem_used_mb = used / 1024 / 1024;
+        let mem_percent = if total > 0 {
+            (used as f64 / total as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+        drop(g);
+
+        #[cfg(windows)]
+        let gpu_percent = self.gpu.sample();
+        #[cfg(not(windows))]
+        let gpu_percent: Option<f32> = None;
+
+        SystemStats {
+            cpu_percent,
+            mem_used_mb,
+            mem_total_mb,
+            mem_percent,
+            gpu_percent,
         }
     }
 

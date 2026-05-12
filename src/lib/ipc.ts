@@ -115,3 +115,13 @@ export interface SettingsPatch {
 export const getSettings = () => invoke<Settings>("get_settings");
 export const updateSettings = (patch: SettingsPatch) =>
   invoke<Settings>("update_settings", { patch });
+
+// 全局机器指标
+export interface SystemStats {
+  cpu_percent: number;
+  mem_used_mb: number;
+  mem_total_mb: number;
+  mem_percent: number;
+  gpu_percent: number | null;
+}
+export const getSystemStats = () => invoke<SystemStats>("get_system_stats");

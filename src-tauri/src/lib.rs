@@ -97,6 +97,7 @@ pub fn run() {
             commands::hide_window,
             commands::get_settings,
             commands::update_settings,
+            commands::get_system_stats,
         ])
         .setup(move |app| {
             // 托盘
@@ -150,6 +151,8 @@ pub fn run() {
                         if win.is_visible().unwrap_or(false) {
                             let list = monitor_tick.snapshot();
                             let _ = app_handle.emit("processes-updated", &list);
+                            let stats = monitor_tick.system_stats();
+                            let _ = app_handle.emit("system-stats", &stats);
                         }
                     }
                 }
