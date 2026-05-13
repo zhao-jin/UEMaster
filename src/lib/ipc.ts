@@ -96,7 +96,7 @@ export const renameHistory = (id: string, label: string) =>
 
 // 启动
 export const launchProcess = (req: LaunchRequest) =>
-  invoke<{ pid: number; history_id: string }>("launch_process", { req });
+  invoke<{ pid: number; history_id: string; replaced_pids: number[] }>("launch_process", { req });
 
 // 窗口
 export const hideWindow = () => invoke<void>("hide_window");

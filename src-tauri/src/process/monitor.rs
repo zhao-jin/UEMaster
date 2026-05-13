@@ -482,6 +482,29 @@ impl Monitor {
         out
     }
 
+    /// 查找命令行匹配指定端口的 DS 进程（含 -server 标记）。
+    /// 仅扫缓存，不做新的全表刷新；调用前最好已经有过一次 snapshot。
+    /// 端口解析口径与前端 `parsePort` 对齐：`-port=NNNN` / `-Port NNNN` /
+    /// `?Port=NNNN` / `host:NNNN`，并把"未显式指定端口的 DS"视为 7777（UE 默认）。
+    pub fn find_ds_pids_by_port(&self, port: u16) -> Vec<u32> {
+        let st = self.state.lock();
+        let mut out = Vec::new();
+        for (pid, s) in st.iter() {
+            let cmd = s.cached_cmdline.as_deref().unwrap_or("");
+            if cmd.is_empty() { continue; }
+            // 必须是 DS：要么 cached_kind 已经精修成 DedicatedServer，要么 cmdline 含 -server
+            let is_ds = matches!(s.cached_kind, Some(UeKind::DedicatedServer))
+                || cmdline_has_server_flag(cmd);
+            if !is_ds { continue; }
+
+            let p = parse_port_from_cmdline(cmd).unwrap_or(7777);
+            if p == port {
+                out.push(*pid);
+            }
+        }
+        out
+    }
+
     /// 杀进程（含子进程树）
     #[cfg(windows)]
     pub fn kill_pid(&self, pid: u32) -> anyhow::Result<()> {
@@ -639,4 +662,114 @@ fn find_history_label(cmdline: &str, history: &[(String, String)]) -> Option<Str
         }
     }
     None
+}
+
+/// 命令行是否带 `-server` / `/server` 标记（即 DS）。
+fn cmdline_has_server_flag(cmdline: &str) -> bool {
+    for tok in cmdline.split_whitespace() {
+        let t = tok.trim_matches('"').trim_matches('\'');
+        if t.eq_ignore_ascii_case("-server") || t.eq_ignore_ascii_case("/server") {
+            return true;
+        }
+    }
+    false
+}
+
+/// 从命令行解析 UE 监听端口（DS 用）。识别口径与前端 `parsePort` 一致：
+///   1) `-port=NNNN` / `-port:NNNN` / `-port NNNN`（大小写不敏感）
+///   2) `?Port=NNNN`（map URL 风格，UE 标准）
+///   3) `host:NNNN`（127.0.0.1:7777 / 0.0.0.0:7777 / localhost:7777）
+/// 任何匹配到的合法端口（1..65535）即返回；都没匹配返回 None。
+pub fn parse_port_from_cmdline(cmdline: &str) -> Option<u16> {
+    if cmdline.is_empty() { return None; }
+    let lower = cmdline.to_ascii_lowercase();
+
+    // 1) -port=NNNN / -port:NNNN
+    if let Some(p) = find_port_after(&lower, "-port=").or_else(|| find_port_after(&lower, "-port:")) {
+        return Some(p);
+    }
+    // 1b) -port NNNN（空白分隔）
+    if let Some(idx) = lower.find("-port") {
+        // 确保 "-port" 是一个独立 token 边界（前面是空白或起始）
+        let prev_ok = idx == 0 || lower.as_bytes()[idx - 1].is_ascii_whitespace();
+        if prev_ok {
+            let after = &lower[idx + "-port".len()..];
+            // 跳过空白
+            let after_trim = after.trim_start();
+            if after.len() != after_trim.len() {
+                if let Some(num) = take_leading_digits(after_trim, 5) {
+                    return Some(num);
+                }
+            }
+        }
+    }
+    // 2) ?port=NNNN
+    if let Some(p) = find_port_after(&lower, "?port=") {
+        return Some(p);
+    }
+    // 3) host:NNNN
+    for host in ["127.0.0.1:", "0.0.0.0:", "localhost:"] {
+        if let Some(p) = find_port_after(&lower, host) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 找 `needle` 之后的 1..=5 位数字端口，返回有效端口（1..65535）。
+fn find_port_after(haystack: &str, needle: &str) -> Option<u16> {
+    let idx = haystack.find(needle)?;
+    let rest = &haystack[idx + needle.len()..];
+    take_leading_digits(rest, 5)
+}
+
+/// 取字符串前缀的连续数字（最多 max_len 位）作为 u16 端口；越界返回 None。
+fn take_leading_digits(s: &str, max_len: usize) -> Option<u16> {
+    let bytes = s.as_bytes();
+    let mut end = 0usize;
+    while end < bytes.len() && end < max_len && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == 0 { return None; }
+    let n: u32 = s[..end].parse().ok()?;
+    if (1..=65535).contains(&n) { Some(n as u16) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_port_dash_eq() {
+        assert_eq!(parse_port_from_cmdline("UE.exe foo -Port=7777 -server"), Some(7777));
+        assert_eq!(parse_port_from_cmdline("-port=8000"), Some(8000));
+    }
+
+    #[test]
+    fn parse_port_question_mark() {
+        assert_eq!(
+            parse_port_from_cmdline("UE.exe map?listen?Port=12345 -server"),
+            Some(12345)
+        );
+    }
+
+    #[test]
+    fn parse_port_space_separated() {
+        assert_eq!(parse_port_from_cmdline("UE.exe -Port 9000 -server"), Some(9000));
+    }
+
+    #[test]
+    fn parse_port_host_form() {
+        assert_eq!(parse_port_from_cmdline("connect 127.0.0.1:7777"), Some(7777));
+    }
+
+    #[test]
+    fn parse_port_invalid() {
+        assert_eq!(parse_port_from_cmdline(""), None);
+        assert_eq!(parse_port_from_cmdline("UE.exe -server"), None);
+        // 0 不是有效端口
+        assert_eq!(parse_port_from_cmdline("-Port=0"), None);
+        // 超界
+        assert_eq!(parse_port_from_cmdline("-Port=70000"), None);
+    }
 }

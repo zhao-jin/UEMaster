@@ -182,6 +182,10 @@ pub struct LaunchRequest {
 pub struct LaunchResult {
     pub pid: u32,
     pub history_id: String,
+    /// 启动前因为"同端口 DS 冲突"被自动 kill 的旧进程 PID 列表（仅 DS 模式可能非空）。
+    /// 前端可据此提示用户："已替换 N 个旧 DS 实例"。
+    #[serde(default)]
+    pub replaced_pids: Vec<u32>,
 }
 
 #[tauri::command]
@@ -214,6 +218,35 @@ pub fn launch_process(
         eprintln!("[launch_process] build_plan failed: {}", msg);
         msg
     })?;
+
+    // ── DS 模式：启动前清理同端口的旧 DS 进程，避免端口冲突 ──
+    // 端口判定：用户传入 req.port（>0）优先；否则按 UE 默认 7777
+    let mut replaced_pids: Vec<u32> = Vec::new();
+    if matches!(req.mode, LaunchMode::DedicatedServer) {
+        let target_port = if req.port > 0 { req.port } else { 7777 };
+        // 先做一次轻量 snapshot 让 monitor 内部 cmdline 缓存更新
+        let _ = state.monitor.snapshot();
+        let conflict_pids = state.monitor.find_ds_pids_by_port(target_port);
+        if !conflict_pids.is_empty() {
+            eprintln!(
+                "[launch_process] DS port {} in use by {:?}, killing first",
+                target_port, conflict_pids
+            );
+            for old_pid in &conflict_pids {
+                if let Err(e) = state.monitor.kill_pid(*old_pid) {
+                    eprintln!("[launch_process] kill old DS pid={} failed: {}", old_pid, e);
+                } else {
+                    replaced_pids.push(*old_pid);
+                }
+            }
+            // taskkill /T /F 是异步的，且 OS 释放 socket 也要一点时间。
+            // 给 800ms 缓冲，避免新 DS bind 时撞旧的 SO_REUSEADDR 残留。
+            if !replaced_pids.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(800));
+            }
+        }
+    }
+
     let pid = spawn(&plan).map_err(|e| {
         let msg = format!("spawn failed: {} (program={}, args={:?})",
             e, plan.program.display(), plan.args);
@@ -266,7 +299,7 @@ pub fn launch_process(
     let list = state.monitor.snapshot();
     let _ = app.emit("processes-updated", &list);
 
-    Ok(LaunchResult { pid, history_id })
+    Ok(LaunchResult { pid, history_id, replaced_pids })
 }
 
 /* ───────── 窗口 ───────── */

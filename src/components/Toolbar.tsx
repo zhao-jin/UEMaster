@@ -51,7 +51,7 @@ export function Toolbar(p: Props) {
     if (busyId) return;
     setBusyId(h.id);
     try {
-      await launchProcess({
+      const r = await launchProcess({
         project_id: h.project_id,
         mode: h.mode,
         map: h.map,
@@ -63,6 +63,9 @@ export function Toolbar(p: Props) {
         label: h.label ?? null,
         save_as_template: false,
       });
+      if (r.replaced_pids?.length) {
+        console.info(`[launch] replaced ${r.replaced_pids.length} stale DS instance(s):`, r.replaced_pids);
+      }
       p.onLaunched?.();
       // 启动会推动 frecency，刷新一下
       reload();

@@ -176,7 +176,7 @@ export function NewProcessDialog({ onClose, onLaunched }: Props) {
           working_dir: workingDir || null,
         });
       }
-      await launchProcess({
+      const r = await launchProcess({
         project_id: projectId,
         mode,
         map: "",
@@ -188,6 +188,9 @@ export function NewProcessDialog({ onClose, onLaunched }: Props) {
         label: label || null,
         save_as_template: saveTpl,
       });
+      if (r.replaced_pids?.length) {
+        console.info(`[launch] replaced ${r.replaced_pids.length} stale DS instance(s):`, r.replaced_pids);
+      }
       onLaunched();
     } catch (e) {
       alert(`Launch failed: ${e}`);
