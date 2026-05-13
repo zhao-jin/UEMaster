@@ -47,7 +47,7 @@ pub struct ProjectPreset {
 fn default_port() -> u16 { 7777 }
 fn default_color() -> String { "#00E5FF".into() }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum LaunchMode {
     Editor,
     PIE,

@@ -26,6 +26,49 @@ const PUSH_HISTORY_TAIL: usize = 60;
 /// 平时只刷已知 UE 进程的 PID，开销显著降低。
 const FULL_SCAN_EVERY: u32 = 10;
 
+/// 历史 label 的命令行匹配规则。
+///
+/// 规则维度（小写、空白 normalize 后比对）：
+///   - `must_contain`：cmdline 必须包含的子串（多个，全部满足才算匹配）
+///   - `must_not_contain`：cmdline 必须不包含的子串（多个，任一命中即不匹配）
+///
+/// 这样能优雅表达"DS 启动 = uproject 路径 ∧ -server"、
+/// "Editor 启动 = uproject 路径 ∧ ¬-server" 等组合，避免引入 mode 概念到 monitor 层。
+#[derive(Debug, Clone)]
+pub struct HistoryLabelRule {
+    pub must_contain: Vec<String>,
+    pub must_not_contain: Vec<String>,
+    pub label: String,
+}
+
+impl HistoryLabelRule {
+    /// 单一子串规则的便捷构造（最常见的 case：直接拿 extra_args 当 key）
+    pub fn single(needle: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            must_contain: vec![needle.into()],
+            must_not_contain: Vec::new(),
+            label: label.into(),
+        }
+    }
+
+    /// `cmd_norm` 应已 to_lowercase + normalize_ws；规则内字符串自身也会做相同处理。
+    fn matches(&self, cmd_norm: &str) -> bool {
+        for s in &self.must_contain {
+            let n = normalize_ws(&s.to_lowercase());
+            if n.is_empty() || !cmd_norm.contains(&n) {
+                return false;
+            }
+        }
+        for s in &self.must_not_contain {
+            let n = normalize_ws(&s.to_lowercase());
+            if !n.is_empty() && cmd_norm.contains(&n) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ProcessHistory {
     pub cpu: Vec<f32>,        // %
@@ -155,10 +198,10 @@ pub struct Monitor {
     /// PID → 用户启动时设置的 Label（"Name 标记"）。
     /// 由 commands::launch_process 调用 `tag_launch()` 写入；子进程完全消失后自动清理。
     labels: Mutex<HashMap<u32, String>>,
-    /// 命令行 → Label 的查找表，用于"之前启动（或外部）的进程"名字恢复。
+    /// 命令行 → Label 的匹配规则表，用于"之前启动（或外部）的进程"名字恢复。
     /// 由外层（launch_process / 定期刷新）通过 `set_history_labels()` 注入最新历史。
-    /// 匹配规则：进程的完整命令行 contains(key)
-    history_labels: Mutex<Vec<(String, String)>>,
+    /// 匹配规则见 `HistoryLabelRule::matches`。
+    history_labels: Mutex<Vec<HistoryLabelRule>>,
     /// history_labels 的版本号；每次 set 时 +1，用于让缓存失效
     history_label_version: AtomicU64,
     /// 全局指标的独立 sysinfo 实例：与 process 表分开避免 process refresh 干扰 cpu/mem 节奏
@@ -237,10 +280,10 @@ impl Monitor {
         self.labels.lock().insert(pid, label);
     }
 
-    /// 用历史记录构建"命令行 → label"查找表。
+    /// 用历史记录构建匹配规则表。
     /// 传入的 entries 应按新鲜度排序（最新在前），这样命令行有多条匹配时取首个。
-    pub fn set_history_labels(&self, entries: Vec<(String, String)>) {
-        *self.history_labels.lock() = entries;
+    pub fn set_history_labels(&self, rules: Vec<HistoryLabelRule>) {
+        *self.history_labels.lock() = rules;
         // bump 版本号，触发各 PerProcState 的 history label 缓存失效
         self.history_label_version.fetch_add(1, Ordering::Relaxed);
     }
@@ -649,19 +692,36 @@ fn find_uproject_in_dir(dir: &std::path::Path) -> Option<String> {
     None
 }
 
-/// 从 history_labels 中找第一条 key 是当前进程 cmdline 子串的条目，返回 label。
-/// 匹配方向：key ⊂ cmdline（把历史的完整 extra_args 或 uproject 路径拿去 contain 进程命令行）。
-fn find_history_label(cmdline: &str, history: &[(String, String)]) -> Option<String> {
+/// 从 history_labels 中找第一条匹配当前进程 cmdline 的规则，返回 label。
+/// 规则结构见 `HistoryLabelRule`。
+fn find_history_label(cmdline: &str, history: &[HistoryLabelRule]) -> Option<String> {
     if cmdline.is_empty() { return None; }
-    let cmd_low = cmdline.to_lowercase();
-    for (key, label) in history {
-        let k = key.trim().to_lowercase();
-        if k.is_empty() { continue; }
-        if cmd_low.contains(&k) {
-            return Some(label.clone());
+    let cmd_norm = normalize_ws(&cmdline.to_lowercase());
+    for rule in history {
+        if rule.matches(&cmd_norm) {
+            return Some(rule.label.clone());
         }
     }
     None
+}
+
+/// 把字符串里所有连续空白（含 \t \n）压缩为单个 ASCII 空格，去掉首尾空白。
+fn normalize_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_ws = true; // 避免开头空格
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+                prev_ws = true;
+            }
+        } else {
+            out.push(ch);
+            prev_ws = false;
+        }
+    }
+    if out.ends_with(' ') { out.pop(); }
+    out
 }
 
 /// 命令行是否带 `-server` / `/server` 标记（即 DS）。
@@ -771,5 +831,48 @@ mod tests {
         assert_eq!(parse_port_from_cmdline("-Port=0"), None);
         // 超界
         assert_eq!(parse_port_from_cmdline("-Port=70000"), None);
+    }
+
+    #[test]
+    fn normalize_ws_collapses_spaces() {
+        assert_eq!(normalize_ws("  a  b\tc\n d "), "a b c d");
+        assert_eq!(normalize_ws("single"), "single");
+        assert_eq!(normalize_ws(""), "");
+    }
+
+    #[test]
+    fn label_match_extra_args_with_double_space() {
+        // 复刻线上 case：history.extra_args 含 "  \"-mwtitle=...\""（双空格 + 转义引号）
+        // 进程实际 cmdline 是单空格 + 普通引号
+        let cmdline = r#"UE4Editor.exe RED.uproject -skipcompile -port=17777 -localds=71000 -LOG=DSRED.log "-mwtitle=RED Local DS 71000""#;
+        let key = r#"-skipcompile -port=17777 -localds=71000 -LOG=DSRED.log  "-mwtitle=RED Local DS 71000""#;
+        let rules = vec![HistoryLabelRule::single(key, "DS71000")];
+        assert_eq!(find_history_label(cmdline, &rules).as_deref(), Some("DS71000"));
+    }
+
+    #[test]
+    fn label_match_must_not_contain() {
+        // Editor: uproject ∧ ¬-server ∧ ¬-game
+        let editor_rule = HistoryLabelRule {
+            must_contain: vec!["RED.uproject".into()],
+            must_not_contain: vec!["-server".into(), "-game".into()],
+            label: "Editor".into(),
+        };
+        let ds_rule = HistoryLabelRule {
+            must_contain: vec!["RED.uproject".into(), "-server".into()],
+            must_not_contain: vec![],
+            label: "DS".into(),
+        };
+        let rules = vec![ds_rule, editor_rule]; // DS 排前面，规则按命中顺序
+
+        // 1) 纯 Editor cmdline
+        let cmd_editor = "UE4Editor.exe RED.uproject -skipcompile";
+        assert_eq!(find_history_label(cmd_editor, &rules).as_deref(), Some("Editor"));
+        // 2) DS cmdline
+        let cmd_ds = "UE4Editor.exe RED.uproject -server -log";
+        assert_eq!(find_history_label(cmd_ds, &rules).as_deref(), Some("DS"));
+        // 3) Game cmdline（应该都不匹配，因为 Editor 规则排除 -game）
+        let cmd_game = "UE4Editor.exe RED.uproject -game";
+        assert_eq!(find_history_label(cmd_game, &rules), None);
     }
 }

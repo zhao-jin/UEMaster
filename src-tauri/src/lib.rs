@@ -19,12 +19,23 @@ pub struct AppState {
     pub refresh_secs: Arc<AtomicU64>,
 }
 
-/// 把 config.history 里最近使用过的条目转成"命令行关键片段 → label"对照，注入 monitor。
-/// 匹配键用 `extra_args`（去掉 -log 等 DS-only 副作用）+ 项目 uproject 文件名，尽可能唯一。
+/// 把 config.history 里最近使用过的条目转成"命令行匹配规则 → label"对照，注入 monitor。
+///
+/// 三类匹配规则按"独特性从强到弱"叠加，每条 history 同时贡献多条规则，monitor 端按
+/// 顺序取首个命中：
+///   1) extra_args 完整子串（最独特，DS / 带参数 Game 都靠这个）。
+///   2) (project + mode) 维度的命令行特征：
+///      * Editor mode → uproject_path ∧ ¬-server ∧ ¬-game
+///      * DS mode     → uproject_path ∧ -server
+///      * Game mode   → uproject_path ∧ -game ∧ ¬-server
+///      * Client mode → uproject_path ∧ -game ∧ ¬-server（同 Game，端口区分）
+///      仅当该 (project, mode) 桶里只有 1 个非空 label 时启用，避免误匹配。
 pub(crate) fn sync_history_labels(
     cfg: &Arc<Mutex<config::Config>>,
     monitor: &Arc<process::Monitor>,
 ) {
+    use process::HistoryLabelRule;
+
     let cfg = cfg.lock();
     // 最近使用优先；只取 label 非空的条目
     let mut entries: Vec<&config::LaunchHistory> = cfg
@@ -34,29 +45,70 @@ pub(crate) fn sync_history_labels(
         .collect();
     entries.sort_by_key(|h| std::cmp::Reverse(h.last_used_at));
 
-    let mut pairs: Vec<(String, String)> = Vec::new();
+    // 预统计：每个 (project_id, mode) 下有多少条 label 不同的历史
+    use std::collections::HashMap;
+    let mut bucket: HashMap<(String, config::LaunchMode), std::collections::HashSet<String>> =
+        HashMap::new();
+    for h in &cfg.history {
+        if let Some(lbl) = h.label.as_deref().filter(|s| !s.is_empty()) {
+            bucket
+                .entry((h.project_id.clone(), h.mode))
+                .or_default()
+                .insert(lbl.to_string());
+        }
+    }
+
+    let mut rules: Vec<HistoryLabelRule> = Vec::new();
     for h in entries {
         let label = h.label.clone().unwrap_or_default();
         if label.is_empty() { continue; }
-        // 关键 1: 完整的 extra_args 拼 port/map（最独特）
-        if !h.extra_args.trim().is_empty() {
-            pairs.push((h.extra_args.trim().to_string(), label.clone()));
+
+        // ── 规则 1：extra_args 完整子串 ──
+        let trimmed = h.extra_args.trim();
+        if !trimmed.is_empty() {
+            rules.push(HistoryLabelRule::single(trimmed, label.clone()));
         }
-        // 关键 2: project 的 uproject 路径 —— 同一项目不同 label 的场景下，
-        // 仅靠 uproject 会误匹配，所以仅当该 label 独占该 project 时才加
-        if let Some(project) = cfg.projects.iter().find(|p| p.id == h.project_id) {
-            let same_project_labels: std::collections::HashSet<&str> = cfg
-                .history
-                .iter()
-                .filter(|x| x.project_id == h.project_id)
-                .filter_map(|x| x.label.as_deref().filter(|s| !s.is_empty()))
-                .collect();
-            if same_project_labels.len() == 1 {
-                pairs.push((project.uproject_path.clone(), label));
-            }
-        }
+
+        // ── 规则 2：(project, mode) 维度特征 ──
+        // 仅当该 (project, mode) 桶里只有 1 个 label 时才启用，避免误匹配
+        let same_bucket = bucket
+            .get(&(h.project_id.clone(), h.mode))
+            .map(|s| s.len())
+            .unwrap_or(0);
+        if same_bucket != 1 { continue; }
+
+        let project = match cfg.projects.iter().find(|p| p.id == h.project_id) {
+            Some(p) => p,
+            None => continue,
+        };
+        let uproj = project.uproject_path.clone();
+        if uproj.is_empty() { continue; }
+
+        let (must, must_not): (Vec<String>, Vec<String>) = match h.mode {
+            config::LaunchMode::Editor => (
+                vec![uproj],
+                vec!["-server".to_string(), "-game".to_string()],
+            ),
+            config::LaunchMode::DedicatedServer => (
+                vec![uproj, "-server".to_string()],
+                Vec::new(),
+            ),
+            config::LaunchMode::Game | config::LaunchMode::PIE => (
+                vec![uproj, "-game".to_string()],
+                vec!["-server".to_string()],
+            ),
+            config::LaunchMode::Client => (
+                vec![uproj, "-game".to_string()],
+                vec!["-server".to_string()],
+            ),
+        };
+        rules.push(HistoryLabelRule {
+            must_contain: must,
+            must_not_contain: must_not,
+            label,
+        });
     }
-    monitor.set_history_labels(pairs);
+    monitor.set_history_labels(rules);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
