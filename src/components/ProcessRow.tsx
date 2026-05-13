@@ -126,12 +126,12 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         )}
       </div>
 
-      {/* Name (launch label) */}
-      <div className="truncate">
+      {/* Name (launch label) — 列模板用 fit-content(120px)，短 label 自然宽，超长按 120px 截断 */}
+      <div className="overflow-hidden">
         {p.launch_label ? (
           <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded
                            bg-accent-purple/15 border border-accent-purple/40 text-accent-purple
-                           truncate inline-block max-w-full"
+                           whitespace-nowrap"
                 title={p.launch_label}>
             {p.launch_label}
           </span>

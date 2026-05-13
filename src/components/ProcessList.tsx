@@ -16,10 +16,14 @@ interface Props {
 /**
  * 列模板 — 共享给表头和每一行，保持对齐。
  * 顺序：PRJ | Name | PID | Type | CPU | Memory | I/O | Uptime | Misc | Actions
- *  - Misc 拿走全部剩余宽度（1fr），其他列按内容自适应
+ *  - Name 列用 max-content（下界 auto 即 min-content 参与计算）。
+ *    以前写成 minmax(48px, max-content) 的问题是：ProcessRow 里的 span 带了
+ *    overflow:hidden/truncate，其 intrinsic-size 汇报给 grid 时几乎为 0，导致
+ *    max-content 退化成 48px 下界。现在 Row 侧已去掉 truncate，max-content 能正确算。
+ *  - Misc 拿走全部剩余宽度（1fr），其他列按内容自适应。
  */
 export const PROC_COLS =
-  "grid-cols-[minmax(64px,max-content)_minmax(48px,max-content)_minmax(48px,auto)_minmax(56px,auto)_minmax(56px,auto)_minmax(64px,auto)_minmax(72px,auto)_minmax(48px,auto)_minmax(80px,1fr)_minmax(56px,max-content)]";
+  "grid-cols-[minmax(64px,max-content)_max-content_minmax(48px,auto)_minmax(56px,auto)_minmax(56px,auto)_minmax(64px,auto)_minmax(72px,auto)_minmax(48px,auto)_minmax(80px,1fr)_minmax(56px,max-content)]";
 
 export function ProcessList({ processes, selectedPid, onSelect, onClickOutsideRow, onAfterAction }: Props) {
   // onSelect/onAfterAction 对外引用稳定即可向下透传给 React.memo 的 ProcessRow
