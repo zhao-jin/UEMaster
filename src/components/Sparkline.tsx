@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 
 interface Props {
   data: number[];
@@ -19,7 +19,7 @@ interface Props {
   viewEnd?: number;
 }
 
-export function Sparkline({
+export const Sparkline = memo(function Sparkline({
   data,
   width,
   height = 56,
@@ -54,13 +54,26 @@ export function Sparkline({
   const w = width ?? autoW;
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
 
-  // 计算可视片段
+  // 计算可视片段（超长时按渲染宽度抽稀，避免 SVG path 过长拖慢渲染）
   const view = useMemo(() => {
     if (data.length === 0) return { slice: [] as number[], start: 0 };
     const s = Math.max(0, Math.min(viewStart ?? 0, data.length - 1));
     const e = Math.max(s, Math.min(viewEnd ?? data.length - 1, data.length - 1));
-    return { slice: data.slice(s, e + 1), start: s };
-  }, [data, viewStart, viewEnd]);
+    const raw = data.slice(s, e + 1);
+    // 目标点数：每个像素 2 个点足够；当 raw 长度超过该值时做"块最大值"抽稀
+    const target = Math.max(60, Math.floor((width ?? autoW) * 2));
+    if (raw.length <= target) return { slice: raw, start: s };
+    const bucket = raw.length / target;
+    const out: number[] = new Array(target);
+    for (let i = 0; i < target; i++) {
+      const a = Math.floor(i * bucket);
+      const b = Math.min(raw.length, Math.floor((i + 1) * bucket));
+      let m = raw[a];
+      for (let k = a + 1; k < b; k++) if (raw[k] > m) m = raw[k];
+      out[i] = m;
+    }
+    return { slice: out, start: s };
+  }, [data, viewStart, viewEnd, width, autoW]);
 
   const { path, area, peak, points } = useMemo(() => {
     const slice = view.slice;
@@ -92,9 +105,11 @@ export function Sparkline({
 
   const handleLeave = () => setHover(null);
 
+  // 稳定的 SVG gradient id，避免 Math.random 引发 DOM 重解析
+  const reactId = useId();
   const gradId = useMemo(
-    () => `sparkfill-${stroke.replace(/[^a-z0-9]/gi, "")}-${Math.random().toString(36).slice(2, 6)}`,
-    [stroke]
+    () => `sparkfill-${reactId.replace(/[:]/g, "")}`,
+    [reactId]
   );
 
   const fmtVal = (v: number): string => {
@@ -187,4 +202,4 @@ export function Sparkline({
       </div>
     </div>
   );
-}
+});

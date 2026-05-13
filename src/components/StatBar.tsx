@@ -67,7 +67,7 @@ export function StatBar({ processes, onAfterAction }: Props) {
     <div className="h-9 flex items-center gap-3 px-3 text-[11px] border-t border-border-subtle bg-black/20">
       {/* UE 进程聚合 */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
         <span className="text-text-secondary">{processes.length} processes</span>
       </div>
       <div className="text-text-dim/40">|</div>

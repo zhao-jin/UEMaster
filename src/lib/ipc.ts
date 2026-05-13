@@ -125,3 +125,11 @@ export interface SystemStats {
   gpu_percent: number | null;
 }
 export const getSystemStats = () => invoke<SystemStats>("get_system_stats");
+
+/** 拉单进程全量 history，用于详情页缩放历史曲线 */
+export const getFullProcess = (pid: number) =>
+  invoke<UeProcess | null>("get_full_process", { pid });
+
+/** 仅拉单进程 history（不重新刷整张进程表），详情页周期调用更省 CPU */
+export const getProcessHistory = (pid: number) =>
+  invoke<ProcessHistory | null>("get_process_history", { pid });

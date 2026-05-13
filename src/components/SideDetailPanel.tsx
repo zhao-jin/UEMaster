@@ -6,8 +6,8 @@ import {
 import { Sparkline } from "./Sparkline";
 import { RangeBrush } from "./RangeBrush";
 import {
-  type LaunchHistory, type ProjectPreset,
-  listHistory, listProjects, launchProcess,
+  type LaunchHistory, type ProjectPreset, type ProcessHistory,
+  listHistory, listProjects, launchProcess, getProcessHistory,
 } from "../lib/ipc";
 
 interface Props {
@@ -183,7 +183,28 @@ function QuickLaunchPanel({ onLaunched }: { onLaunched?: () => void }) {
   );
 }
 
-function DetailContent({ p }: { p: UeProcess }) {
+function DetailContent({ p: pBase }: { p: UeProcess }) {
+  // 列表推送的 history 已截断（默认 60 条）；详情页周期性按 PID 拉全量覆盖。
+  // 用 getProcessHistory（轻量，不刷整张进程表）替代旧的 getFullProcess。
+  const [fullHist, setFullHist] = useState<ProcessHistory | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const h = await getProcessHistory(pBase.pid);
+        if (!cancelled && h) setFullHist(h);
+      } catch { /* ignore */ }
+    };
+    tick();
+    const id = window.setInterval(tick, 5000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [pBase.pid]);
+
+  const p: UeProcess = useMemo(
+    () => fullHist ? { ...pBase, history: fullHist } : pBase,
+    [pBase, fullHist]
+  );
+
   // 总样本数（三条曲线长度一致；以 cpu 为基准）
   const total = p.history.cpu.length;
 

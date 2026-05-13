@@ -1,13 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use sysinfo::{ProcessRefreshKind, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use super::identify::{identify, UeKind};
-use super::iocounters::read_io_bytes;
+use super::iocounters::{close_io_handle, read_io_bytes_cached, IoHandle};
 #[cfg(windows)]
 use super::cmdline::full_cmdline_for_pid;
 #[cfg(windows)]
@@ -16,6 +17,14 @@ use super::gpu::GpuSampler;
 /// 历史样本数量上限（足够长：@2s 是 4 小时，@5s 是 10 小时）。
 /// 进程终止后整个 PerProcState 会被回收，单进程峰值内存约 7200 × 3 × 4B ≈ 86KB
 const HISTORY_LEN: usize = 7200;
+
+/// 普通 tick 推送给前端的 history 长度上限（节省 IPC 流量）。
+/// 详情页通过 get_process_history 单独按 PID 拉全量。
+const PUSH_HISTORY_TAIL: usize = 60;
+
+/// 多少轮 tick 才做一次"全表扫描"以发现新 UE 进程。
+/// 平时只刷已知 UE 进程的 PID，开销显著降低。
+const FULL_SCAN_EVERY: u32 = 10;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ProcessHistory {
@@ -45,52 +54,104 @@ pub struct UeProcessInfo {
     pub history: ProcessHistory,
 }
 
-/// 每个进程的采样状态：上次 IO 字节累计 + 上次采样时刻 + 历史环形 + 静态字段缓存
+/// 每个进程的采样状态（环形 history + 静态字段缓存 + Win32 句柄缓存）
 struct PerProcState {
     last_io_bytes: u64,
     last_sample_at: Instant,
-    history: ProcessHistory,
+    /// 用 VecDeque 实现 O(1) 滑窗
+    cpu_hist: VecDeque<f32>,
+    mem_hist: VecDeque<u32>,
+    io_hist: VecDeque<u32>,
     /// 命令行：进程一旦确定就不会变，缓存避免重复 PEB 调用
     cached_cmdline: Option<String>,
     /// 项目名：靠 cmdline + cwd 解析，结果缓存避免每 2s 扫磁盘
     cached_project: Option<Option<String>>,
+    /// exe 路径：sysinfo 用 OnlyIfNotSet 拿到一次后缓存
+    cached_exe: Option<String>,
+    /// cwd：sysinfo 偶尔会拿不到；首次拿到就缓存
+    cached_cwd: Option<Option<String>>,
+    /// 名称：进程生命期内不变，缓存
+    cached_name: Option<String>,
+    /// kind 经过 cmdline 精修后的最终结果，缓存
+    cached_kind: Option<UeKind>,
+    /// start_time：进程生命期内不变，缓存
+    cached_start_time: Option<u64>,
     /// 历史 label 匹配结果：根据 cmdline 一次定下，缓存
     cached_history_label: Option<Option<String>>,
     /// 历史 label 表的版本号；版本变了要重算 cached_history_label
     history_label_version: u64,
+    /// IO 用的进程句柄；首次成功 OpenProcess 后缓存，进程退出时统一释放
+    io_handle: IoHandle,
 }
 
 impl PerProcState {
-    fn new(initial_bytes: u64) -> Self {
+    fn new() -> Self {
         Self {
-            last_io_bytes: initial_bytes,
+            last_io_bytes: 0,
             last_sample_at: Instant::now(),
-            history: ProcessHistory::default(),
+            cpu_hist: VecDeque::with_capacity(HISTORY_LEN),
+            mem_hist: VecDeque::with_capacity(HISTORY_LEN),
+            io_hist: VecDeque::with_capacity(HISTORY_LEN),
             cached_cmdline: None,
             cached_project: None,
+            cached_exe: None,
+            cached_cwd: None,
+            cached_name: None,
+            cached_kind: None,
+            cached_start_time: None,
             cached_history_label: None,
             history_label_version: 0,
+            io_handle: IoHandle::new(),
         }
     }
 
-    /// 给历史环形 push 一条样本，超长则前移
-    fn push_history(&mut self, cpu: f32, mem_mb: u32, io_kbps: u32) {
-        push_capped(&mut self.history.cpu, cpu, HISTORY_LEN);
-        push_capped(&mut self.history.mem_mb, mem_mb, HISTORY_LEN);
-        push_capped(&mut self.history.io_kbps, io_kbps, HISTORY_LEN);
+    fn push(&mut self, cpu: f32, mem_mb: u32, io_kbps: u32) {
+        push_capped(&mut self.cpu_hist, cpu, HISTORY_LEN);
+        push_capped(&mut self.mem_hist, mem_mb, HISTORY_LEN);
+        push_capped(&mut self.io_hist, io_kbps, HISTORY_LEN);
+    }
+
+    /// 取尾部 n 条样本（None = 全量）
+    fn snapshot_history(&self, tail: Option<usize>) -> ProcessHistory {
+        match tail {
+            Some(n) if self.cpu_hist.len() > n => {
+                let start = self.cpu_hist.len() - n;
+                ProcessHistory {
+                    cpu: self.cpu_hist.iter().skip(start).copied().collect(),
+                    mem_mb: self.mem_hist.iter().skip(start).copied().collect(),
+                    io_kbps: self.io_hist.iter().skip(start).copied().collect(),
+                }
+            }
+            _ => ProcessHistory {
+                cpu: self.cpu_hist.iter().copied().collect(),
+                mem_mb: self.mem_hist.iter().copied().collect(),
+                io_kbps: self.io_hist.iter().copied().collect(),
+            },
+        }
     }
 }
 
-fn push_capped<T>(v: &mut Vec<T>, x: T, cap: usize) {
-    if v.len() >= cap {
-        v.remove(0);
+impl Drop for PerProcState {
+    fn drop(&mut self) {
+        // 回收 IO 句柄
+        close_io_handle(&mut self.io_handle);
     }
-    v.push(x);
+}
+
+fn push_capped<T>(v: &mut VecDeque<T>, x: T, cap: usize) {
+    if v.len() >= cap {
+        v.pop_front();
+    }
+    v.push_back(x);
 }
 
 pub struct Monitor {
     sys: Mutex<System>,
     state: Mutex<HashMap<u32, PerProcState>>,
+    /// 已知的 UE 进程 PID 集合 —— 平时只刷这些，每 FULL_SCAN_EVERY 轮做一次全量发现
+    known_ue_pids: Mutex<HashSet<u32>>,
+    /// tick 计数；用于决定是否做全量发现扫描
+    tick_count: AtomicU32,
     /// PID → 用户启动时设置的 Label（"Name 标记"）。
     /// 由 commands::launch_process 调用 `tag_launch()` 写入；子进程完全消失后自动清理。
     labels: Mutex<HashMap<u32, String>>,
@@ -99,7 +160,7 @@ pub struct Monitor {
     /// 匹配规则：进程的完整命令行 contains(key)
     history_labels: Mutex<Vec<(String, String)>>,
     /// history_labels 的版本号；每次 set 时 +1，用于让缓存失效
-    history_label_version: std::sync::atomic::AtomicU64,
+    history_label_version: AtomicU64,
     /// 全局指标的独立 sysinfo 实例：与 process 表分开避免 process refresh 干扰 cpu/mem 节奏
     global_sys: Mutex<System>,
     #[cfg(windows)]
@@ -123,23 +184,16 @@ pub struct SystemStats {
 
 impl Monitor {
     pub fn new() -> Self {
-        // 注意：不再用 ProcessRefreshKind::everything()，避免 sysinfo 内部解析
-        // 我们用不到的字段（exe / cwd / cmd 已经手动管理 + 缓存）
-        let mut sys = System::new();
-        sys.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::new()
-                .with_cpu()
-                .with_memory()
-                .with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
-        );
+        let sys = System::new();
+        // 注意：不在 new() 里 refresh_all，第一次 snapshot_with 会做全量扫描
         Self {
             sys: Mutex::new(sys),
             state: Mutex::new(HashMap::new()),
+            known_ue_pids: Mutex::new(HashSet::new()),
+            tick_count: AtomicU32::new(0),
             labels: Mutex::new(HashMap::new()),
             history_labels: Mutex::new(Vec::new()),
-            history_label_version: std::sync::atomic::AtomicU64::new(0),
+            history_label_version: AtomicU64::new(0),
             global_sys: Mutex::new(System::new()),
             #[cfg(windows)]
             gpu: GpuSampler::new(),
@@ -188,158 +242,240 @@ impl Monitor {
     pub fn set_history_labels(&self, entries: Vec<(String, String)>) {
         *self.history_labels.lock() = entries;
         // bump 版本号，触发各 PerProcState 的 history label 缓存失效
-        self.history_label_version
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.history_label_version.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// 拍一次快照（自动刷新）
+    /// 拍一次快照（自动刷新）—— 推送给前端列表用，history 字段被截断到 PUSH_HISTORY_TAIL
+    /// 节省 IPC 序列化和拷贝开销。详情页通过 `history_for_pid` 单独按 PID 拉全量。
     pub fn snapshot(&self) -> Vec<UeProcessInfo> {
+        self.snapshot_with(Some(PUSH_HISTORY_TAIL))
+    }
+
+    /// 完整 snapshot（仅在 list_processes 命令里被调用，少用）
+    pub fn snapshot_full(&self) -> Vec<UeProcessInfo> {
+        self.snapshot_with(None)
+    }
+
+    /// 仅返回某 PID 的完整 history（不重新刷整张表）。
+    /// 详情页 5s 周期调用，数据量约 86KB / PID。
+    pub fn history_for_pid(&self, pid: u32) -> Option<ProcessHistory> {
+        self.state.lock().get(&pid).map(|s| s.snapshot_history(None))
+    }
+
+    /// 内部：刷新 sysinfo + 收集 UE 进程 + 算 IO/历史 + 返回快照。
+    /// `history_tail` 控制返回的 history 长度（None = 全量）。
+    fn snapshot_with(&self, history_tail: Option<usize>) -> Vec<UeProcessInfo> {
+        // ── 决定本轮是否做"全表扫描" ──
+        // 第一次（tick_count 还是 0）必须全扫一次，否则 known_ue_pids 永远是空。
+        let tick = self.tick_count.fetch_add(1, Ordering::Relaxed);
+        let need_full_scan = tick == 0 || tick % FULL_SCAN_EVERY == 0;
+
+        let refresh_kind = ProcessRefreshKind::new()
+            .with_cpu()
+            .with_memory()
+            .with_exe(sysinfo::UpdateKind::OnlyIfNotSet);
+
         let mut sys = self.sys.lock();
-        // 只刷 CPU/MEM；exe 用 OnlyIfNotSet（首次拿到后不再重读）；cwd/cmd 完全不让 sysinfo 处理
-        sys.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::new()
-                .with_cpu()
-                .with_memory()
-                .with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
-        );
 
-        // 收集 UE 进程
-        let mut all: Vec<(u32, u32, UeKind)> = Vec::new();
-        let mut by_pid: HashMap<u32, &sysinfo::Process> = HashMap::new();
+        if need_full_scan {
+            // 全表刷新：发现新 UE 进程
+            sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
 
-        for (pid, proc) in sys.processes() {
-            let kind = identify(proc);
-            if !kind.is_ue() {
-                continue;
+            // 重建 known_ue_pids：遍历所有进程，识别 UE 进程
+            let mut known: HashSet<u32> = HashSet::new();
+            for (pid, proc) in sys.processes() {
+                if identify(proc).is_ue() {
+                    known.insert(pid.as_u32());
+                }
             }
-            let parent = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
-            all.push((pid.as_u32(), parent, kind));
-            by_pid.insert(pid.as_u32(), proc);
+            *self.known_ue_pids.lock() = known;
+        } else {
+            // 增量刷新：只刷已知 UE 进程
+            let pids: Vec<Pid> = self
+                .known_ue_pids
+                .lock()
+                .iter()
+                .map(|p| Pid::from_u32(*p))
+                .collect();
+            if !pids.is_empty() {
+                sys.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&pids),
+                    true,
+                    refresh_kind,
+                );
+            }
         }
 
-        // 父 -> 子 索引
+        // ── 收集本轮存活的 UE 进程 ──
+        // 注意：增量 refresh 模式下，已死的进程会被 sysinfo 自动从表里移除，
+        // 所以这里直接看 sys.process(pid) 是否还在即可。
+        let known_snapshot: Vec<u32> = self.known_ue_pids.lock().iter().copied().collect();
+
+        let mut alive: Vec<u32> = Vec::new();
+        let mut dead_in_known: Vec<u32> = Vec::new();
+        for pid in &known_snapshot {
+            if sys.process(Pid::from_u32(*pid)).is_some() {
+                alive.push(*pid);
+            } else {
+                dead_in_known.push(*pid);
+            }
+        }
+        // 把已死 PID 从 known 表里剔除
+        if !dead_in_known.is_empty() {
+            let mut k = self.known_ue_pids.lock();
+            for pid in &dead_in_known {
+                k.remove(pid);
+            }
+        }
+
+        // ── 收集 parent / children 关系 ──
+        let mut parents: HashMap<u32, u32> = HashMap::new();
         let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
-        for (pid, parent, _) in &all {
-            if *parent != 0 {
-                children_map.entry(*parent).or_default().push(*pid);
+        for pid in &alive {
+            if let Some(p) = sys.process(Pid::from_u32(*pid)) {
+                let parent = p.parent().map(|x| x.as_u32()).unwrap_or(0);
+                parents.insert(*pid, parent);
+                if parent != 0 {
+                    children_map.entry(parent).or_default().push(*pid);
+                }
             }
         }
 
-        // 状态表：清理已经消失的 PID，避免内存增长
-        let alive: std::collections::HashSet<u32> = all.iter().map(|(p, _, _)| *p).collect();
+        // ── 清理 state / labels 中的死 PID ──
+        let alive_set: HashSet<u32> = alive.iter().copied().collect();
         {
             let mut st = self.state.lock();
-            st.retain(|pid, _| alive.contains(pid));
+            st.retain(|pid, _| alive_set.contains(pid));
             let mut lb = self.labels.lock();
-            lb.retain(|pid, _| alive.contains(pid));
+            lb.retain(|pid, _| alive_set.contains(pid));
         }
 
         let labels_snapshot = self.labels.lock().clone();
-        // 仅当版本变化或某 PID 还没缓存时才会真正访问 history_labels
-        let cur_history_version = self
-            .history_label_version
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let cur_history_version = self.history_label_version.load(Ordering::Relaxed);
         let history_labels = self.history_labels.lock().clone();
 
         let now = Instant::now();
-        let mut out = Vec::with_capacity(all.len());
+        let mut out = Vec::with_capacity(alive.len());
         let mut state = self.state.lock();
 
-        for (pid, parent, kind) in &all {
-            if let Some(p) = by_pid.get(pid) {
-                let entry = state.entry(*pid).or_insert_with(|| PerProcState::new(0));
+        for pid in &alive {
+            let p = match sys.process(Pid::from_u32(*pid)) {
+                Some(x) => x,
+                None => continue,
+            };
+            let parent = parents.get(pid).copied().unwrap_or(0);
+            let entry = state.entry(*pid).or_insert_with(PerProcState::new);
 
-                // ── cmdline 缓存（命令行进程生命期内不变） ──
-                if entry.cached_cmdline.is_none() {
-                    let cmd_vec: Vec<String> = p
-                        .cmd()
-                        .iter()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .collect();
-                    let mut cmdline = cmd_vec.join(" ");
-                    #[cfg(windows)]
-                    if cmdline.trim().is_empty() {
-                        if let Some(full) = full_cmdline_for_pid(*pid) {
-                            cmdline = full;
-                        }
-                    }
-                    entry.cached_cmdline = Some(cmdline);
-                }
-                let cmdline = entry.cached_cmdline.clone().unwrap_or_default();
-
-                // ── project_name 缓存（依赖 cmdline + cwd + 磁盘扫描，开销大） ──
-                let project_name = if let Some(cached) = entry.cached_project.clone() {
-                    cached
-                } else {
-                    let exe = p.exe().map(PathBuf::from).unwrap_or_default();
-                    let cwd = p.cwd().map(PathBuf::from);
-                    let v = extract_project_name(&cmdline, &exe, cwd.as_deref());
-                    entry.cached_project = Some(v.clone());
-                    v
-                };
-
-                // ── history label 缓存（按版本号失效） ──
-                let history_label = if entry.history_label_version == cur_history_version {
-                    entry.cached_history_label.clone().flatten()
-                } else {
-                    let v = find_history_label(&cmdline, &history_labels);
-                    entry.cached_history_label = Some(v.clone());
-                    entry.history_label_version = cur_history_version;
-                    v
-                };
-
-                // ── exe / cwd 用于上报；优先用 sysinfo 已经读到的（OnlyIfNotSet） ──
-                let exe_path = p
-                    .exe()
-                    .map(|x| x.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let cwd_str = p.cwd().map(|c| c.to_string_lossy().to_string());
-
-                // ── IO 速率（每轮都要算） ──
-                let cur_io_bytes = read_io_bytes(*pid).unwrap_or(0);
-                let dt = now.saturating_duration_since(entry.last_sample_at).as_secs_f64();
-                let io_kbps: u32 = if dt > 0.05 && cur_io_bytes >= entry.last_io_bytes && entry.last_io_bytes != 0 {
-                    let delta = (cur_io_bytes - entry.last_io_bytes) as f64;
-                    (delta / 1024.0 / dt).clamp(0.0, u32::MAX as f64) as u32
-                } else {
-                    0
-                };
-                entry.last_io_bytes = cur_io_bytes;
-                entry.last_sample_at = now;
-
-                let cpu = p.cpu_usage();
-                let mem_mb_u64 = p.memory() / 1024 / 1024;
-                let mem_mb = mem_mb_u64.min(u32::MAX as u64) as u32;
-
-                entry.push_history(cpu, mem_mb, io_kbps);
-                let history_clone = entry.history.clone();
-
-                // ── 根据完整命令行（可能来自 PEB）再次精修 kind ──
-                // identify() 只用 sysinfo 的 cmd 字段，Windows 下经常拿不到别人进程的命令行，
-                // 所以 DS 可能初判成 Editor。这里用缓存的 cmdline 纠正。
-                let refined_kind = refine_kind(*kind, &cmdline);
-
-                out.push(UeProcessInfo {
-                    pid: *pid,
-                    parent_pid: *parent,
-                    name: p.name().to_string_lossy().to_string(),
-                    kind: refined_kind,
-                    cmdline,
-                    cwd: cwd_str,
-                    exe_path,
-                    project_name,
-                    launch_label: labels_snapshot.get(pid).cloned().or(history_label),
-                    cpu_percent: cpu,
-                    mem_mb: mem_mb_u64,
-                    io_kbps,
-                    threads: 0,
-                    start_time: p.start_time(),
-                    children: children_map.get(pid).cloned().unwrap_or_default(),
-                    history: history_clone,
-                });
+            // ── name / start_time（生命期内不变，缓存） ──
+            if entry.cached_name.is_none() {
+                entry.cached_name = Some(p.name().to_string_lossy().to_string());
             }
+            if entry.cached_start_time.is_none() {
+                entry.cached_start_time = Some(p.start_time());
+            }
+            let name = entry.cached_name.clone().unwrap_or_default();
+            let start_time = entry.cached_start_time.unwrap_or(0);
+
+            // ── cmdline 缓存 ──
+            if entry.cached_cmdline.is_none() {
+                let cmd_vec: Vec<String> = p
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .collect();
+                let mut cmdline = cmd_vec.join(" ");
+                #[cfg(windows)]
+                if cmdline.trim().is_empty() {
+                    if let Some(full) = full_cmdline_for_pid(*pid) {
+                        cmdline = full;
+                    }
+                }
+                entry.cached_cmdline = Some(cmdline);
+            }
+            let cmdline = entry.cached_cmdline.clone().unwrap_or_default();
+
+            // ── exe / cwd（首次拿到就缓存） ──
+            if entry.cached_exe.is_none() {
+                if let Some(e) = p.exe() {
+                    entry.cached_exe = Some(e.to_string_lossy().to_string());
+                }
+            }
+            if entry.cached_cwd.is_none() {
+                entry.cached_cwd = Some(p.cwd().map(|c| c.to_string_lossy().to_string()));
+            }
+            let exe_path = entry.cached_exe.clone().unwrap_or_default();
+            let cwd_str = entry.cached_cwd.clone().unwrap_or(None);
+
+            // ── kind 缓存（用 cmdline 精修一次定终身） ──
+            if entry.cached_kind.is_none() {
+                let initial = identify(p);
+                entry.cached_kind = Some(refine_kind(initial, &cmdline));
+            }
+            let kind = entry.cached_kind.unwrap_or(UeKind::Unknown);
+
+            // ── project_name 缓存 ──
+            let project_name = if let Some(cached) = entry.cached_project.clone() {
+                cached
+            } else {
+                let exe_path_buf = PathBuf::from(&exe_path);
+                let cwd_path = cwd_str.as_deref().map(std::path::Path::new);
+                let v = extract_project_name(&cmdline, &exe_path_buf, cwd_path);
+                entry.cached_project = Some(v.clone());
+                v
+            };
+
+            // ── history label 缓存 ──
+            let history_label = if entry.history_label_version == cur_history_version
+                && entry.cached_history_label.is_some()
+            {
+                entry.cached_history_label.clone().flatten()
+            } else {
+                let v = find_history_label(&cmdline, &history_labels);
+                entry.cached_history_label = Some(v.clone());
+                entry.history_label_version = cur_history_version;
+                v
+            };
+
+            // ── IO 速率（每轮都要算；用缓存的句柄） ──
+            let cur_io_bytes = read_io_bytes_cached(*pid, &mut entry.io_handle).unwrap_or(0);
+            let dt = now.saturating_duration_since(entry.last_sample_at).as_secs_f64();
+            let io_kbps: u32 = if dt > 0.05
+                && cur_io_bytes >= entry.last_io_bytes
+                && entry.last_io_bytes != 0
+            {
+                let delta = (cur_io_bytes - entry.last_io_bytes) as f64;
+                (delta / 1024.0 / dt).clamp(0.0, u32::MAX as f64) as u32
+            } else {
+                0
+            };
+            entry.last_io_bytes = cur_io_bytes;
+            entry.last_sample_at = now;
+
+            let cpu = p.cpu_usage();
+            let mem_mb_u64 = p.memory() / 1024 / 1024;
+            let mem_mb = mem_mb_u64.min(u32::MAX as u64) as u32;
+
+            entry.push(cpu, mem_mb, io_kbps);
+            let history_clone = entry.snapshot_history(history_tail);
+
+            out.push(UeProcessInfo {
+                pid: *pid,
+                parent_pid: parent,
+                name,
+                kind,
+                cmdline,
+                cwd: cwd_str,
+                exe_path,
+                project_name,
+                launch_label: labels_snapshot.get(pid).cloned().or(history_label),
+                cpu_percent: cpu,
+                mem_mb: mem_mb_u64,
+                io_kbps,
+                threads: 0,
+                start_time,
+                children: children_map.get(pid).cloned().unwrap_or_default(),
+                history: history_clone,
+            });
         }
 
         out.sort_by_key(|p| (kind_order(p.kind), p.pid));
@@ -429,7 +565,8 @@ fn extract_project_name(
         }
     }
 
-    // 2 & 3) 沿父目录回溯 + 兄弟扫描
+    // 2 & 3) 沿父目录回溯 + 兄弟扫描（限制兄弟目录扫描数量，防止大目录拖慢）
+    const MAX_SIBLINGS_PER_LEVEL: usize = 30;
     if let Some(start) = cwd {
         let mut cur: Option<&std::path::Path> = Some(start);
         for _ in 0..6 {
@@ -444,9 +581,14 @@ fn extract_project_name(
             // 兄弟目录扫描
             if let Some(parent) = dir.parent() {
                 if let Ok(entries) = std::fs::read_dir(parent) {
+                    let mut scanned = 0usize;
                     for e in entries.flatten() {
+                        if scanned >= MAX_SIBLINGS_PER_LEVEL {
+                            break;
+                        }
                         let p = e.path();
                         if p.is_dir() && p.as_path() != dir {
+                            scanned += 1;
                             if let Some(name) = find_uproject_in_dir(&p) {
                                 return Some(name);
                             }

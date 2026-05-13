@@ -6,6 +6,6 @@ pub(crate) mod cmdline;
 #[cfg(windows)]
 mod gpu;
 
-pub use monitor::{Monitor, SystemStats, UeProcessInfo};
+pub use monitor::{Monitor, ProcessHistory, SystemStats, UeProcessInfo};
 #[allow(unused_imports)]
 pub use identify::UeKind;

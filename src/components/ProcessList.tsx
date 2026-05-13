@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { useCallback } from "react";
 import { ProcessRow } from "./ProcessRow";
 import type { UeProcess } from "../lib/ipc";
 import { Hexagon } from "lucide-react";
@@ -21,6 +22,10 @@ export const PROC_COLS =
   "grid-cols-[minmax(64px,max-content)_minmax(48px,max-content)_minmax(48px,auto)_minmax(56px,auto)_minmax(56px,auto)_minmax(64px,auto)_minmax(72px,auto)_minmax(48px,auto)_minmax(80px,1fr)_minmax(56px,max-content)]";
 
 export function ProcessList({ processes, selectedPid, onSelect, onClickOutsideRow, onAfterAction }: Props) {
+  // onSelect/onAfterAction 对外引用稳定即可向下透传给 React.memo 的 ProcessRow
+  const handleSelect = useCallback((pid: number) => onSelect(pid), [onSelect]);
+  const handleAfter = useCallback(() => onAfterAction(), [onAfterAction]);
+
   const handleBgClick = (e: React.MouseEvent) => {
     // 只在点到行外（包括表头/空白处/底部空白）时触发
     const target = e.target as HTMLElement;
@@ -61,19 +66,19 @@ export function ProcessList({ processes, selectedPid, onSelect, onClickOutsideRo
       </div>
 
       <AnimatePresence initial={false}>
-        {processes.map((p, i) => (
+        {processes.map((p) => (
           <motion.div
             key={p.pid}
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 8 }}
-            transition={{ duration: 0.18, delay: i * 0.015 }}
+            transition={{ duration: 0.18 }}
           >
             <ProcessRow
               process={p}
               selected={selectedPid === p.pid}
-              onSelect={() => onSelect(p.pid)}
-              onAfterAction={onAfterAction}
+              onSelect={handleSelect}
+              onAfterAction={handleAfter}
             />
           </motion.div>
         ))}

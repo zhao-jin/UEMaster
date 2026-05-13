@@ -98,6 +98,8 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_system_stats,
+            commands::get_full_process,
+            commands::get_process_history,
         ])
         .setup(move |app| {
             // 托盘
@@ -146,13 +148,30 @@ pub fn run() {
                     if tick_count % 10 == 0 {
                         sync_history_labels(&cfg_tick, &monitor_tick);
                     }
-                    // 仅当主窗口可见时刷新，节省资源
+                    // 仅当主窗口可见且未最小化时才刷新，节省资源
                     if let Some(win) = app_handle.get_webview_window("main") {
-                        if win.is_visible().unwrap_or(false) {
+                        let visible = win.is_visible().unwrap_or(false);
+                        let minimized = win.is_minimized().unwrap_or(false);
+                        if visible && !minimized {
+                            let t0 = std::time::Instant::now();
                             let list = monitor_tick.snapshot();
-                            let _ = app_handle.emit("processes-updated", &list);
+                            let t1 = std::time::Instant::now();
                             let stats = monitor_tick.system_stats();
+                            let t2 = std::time::Instant::now();
+                            let _ = app_handle.emit("processes-updated", &list);
                             let _ = app_handle.emit("system-stats", &stats);
+                            let t3 = std::time::Instant::now();
+
+                            // 启用 PROFILE 环境变量时打印各阶段耗时
+                            if std::env::var("UE_MASTER_PROFILE").is_ok() {
+                                eprintln!(
+                                    "[profile] snapshot={:>6.2}ms sysstats={:>5.2}ms emit={:>5.2}ms procs={}",
+                                    (t1 - t0).as_secs_f64() * 1000.0,
+                                    (t2 - t1).as_secs_f64() * 1000.0,
+                                    (t3 - t2).as_secs_f64() * 1000.0,
+                                    list.len()
+                                );
+                            }
                         }
                     }
                 }

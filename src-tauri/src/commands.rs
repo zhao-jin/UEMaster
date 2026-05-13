@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config::{LaunchHistory, LaunchMode, ProjectPreset, Settings};
 use crate::launcher::{build_plan, spawn, LaunchOptions};
-use crate::process::{SystemStats, UeProcessInfo};
+use crate::process::{ProcessHistory, SystemStats, UeProcessInfo};
 use crate::AppState;
 
 type Cmd<T> = Result<T, String>;
@@ -22,6 +22,19 @@ pub fn list_processes(state: State<'_, AppState>) -> Cmd<Vec<UeProcessInfo>> {
 #[tauri::command]
 pub fn get_system_stats(state: State<'_, AppState>) -> Cmd<SystemStats> {
     Ok(state.monitor.system_stats())
+}
+
+/// 详情页用：拉单个 PID 的完整 history（最多 7200 条）
+#[tauri::command]
+pub fn get_full_process(state: State<'_, AppState>, pid: u32) -> Cmd<Option<UeProcessInfo>> {
+    Ok(state.monitor.snapshot_full().into_iter().find(|p| p.pid == pid))
+}
+
+/// 详情页专用：仅返回该 PID 的 history（不重新刷整张表，省 CPU）。
+/// 列表 tick 推送的 history 已截断到 60 条，详情页用这个拉全量。
+#[tauri::command]
+pub fn get_process_history(state: State<'_, AppState>, pid: u32) -> Cmd<Option<ProcessHistory>> {
+    Ok(state.monitor.history_for_pid(pid))
 }
 
 #[tauri::command]

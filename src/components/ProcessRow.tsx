@@ -1,5 +1,6 @@
 import { FolderOpen, X } from "lucide-react";
 import clsx from "clsx";
+import { memo } from "react";
 import type { UeProcess } from "../lib/ipc";
 import { killProcess, openInExplorer } from "../lib/ipc";
 import { PROC_COLS } from "./ProcessList";
@@ -7,7 +8,8 @@ import { PROC_COLS } from "./ProcessList";
 interface Props {
   process: UeProcess;
   selected: boolean;
-  onSelect: () => void;
+  /** 接收 pid 的稳定回调（避免父组件每次新建 inline arrow 破坏 memo） */
+  onSelect: (pid: number) => void;
   onAfterAction: () => void;
 }
 
@@ -64,7 +66,12 @@ function parsePort(cmd: string): number | null {
   return n > 0 && n < 65536 ? n : null;
 }
 
-export function ProcessRow({ process: p, selected, onSelect, onAfterAction }: Props) {
+export function ProcessRow(props: Props) {
+  return <ProcessRowInner {...props} />;
+}
+
+/** 真正的渲染体；用 React.memo 包裹，cpu/mem/io 抖动 < 阈值时不重渲染。 */
+const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, onSelect, onAfterAction }: Props) {
   const cpuColor = p.cpu_percent > 80 ? "text-accent-red"
     : p.cpu_percent > 40 ? "text-accent-orange"
     : "text-text-primary";
@@ -86,7 +93,7 @@ export function ProcessRow({ process: p, selected, onSelect, onAfterAction }: Pr
   return (
     <div
       data-process-row
-      onClick={onSelect}
+      onClick={() => onSelect(p.pid)}
       className={clsx(
         "group relative grid",
         PROC_COLS,
@@ -191,4 +198,39 @@ export function ProcessRow({ process: p, selected, onSelect, onAfterAction }: Pr
       </div>
     </div>
   );
+}, areRowPropsEqual);
+
+/**
+ * 自定义浅比较：只关注会影响渲染输出的字段，并对 cpu/mem 加抖动阈值。
+ * - cpu / mem 抖动 < 0.5 不重渲染（视觉无差异）
+ * - io_kbps 跨 0 边界时仍然要更新（绿色/灰色切换）
+ * - kind / project_name / launch_label / exe_path / cmdline 变化要更新
+ */
+function areRowPropsEqual(prev: Props, next: Props): boolean {
+  if (prev.selected !== next.selected) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.onAfterAction !== next.onAfterAction) return false;
+
+  const a = prev.process;
+  const b = next.process;
+  if (a === b) return true;
+  if (a.pid !== b.pid) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.project_name !== b.project_name) return false;
+  if (a.launch_label !== b.launch_label) return false;
+  if (a.exe_path !== b.exe_path) return false;
+  if (a.cmdline !== b.cmdline) return false;
+  if (a.start_time !== b.start_time) return false;
+
+  // CPU 抖动 < 0.5% 视为无变化
+  if (Math.abs(a.cpu_percent - b.cpu_percent) > 0.5) return false;
+  // 内存 < 1MB 抖动视为无变化
+  if (Math.abs(a.mem_mb - b.mem_mb) > 1) return false;
+  // IO 0 边界要保留响应
+  if ((a.io_kbps > 0) !== (b.io_kbps > 0)) return false;
+  // IO 数值差异 > 5% 才更新
+  const ioDiff = Math.abs(a.io_kbps - b.io_kbps);
+  if (ioDiff > 1 && ioDiff > Math.max(a.io_kbps, b.io_kbps) * 0.05) return false;
+
+  return true;
 }
