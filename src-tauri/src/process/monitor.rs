@@ -851,6 +851,19 @@ mod tests {
     }
 
     #[test]
+    fn label_match_real_world_red_ds71000() {
+        // 完全复刻 config.toml 里 DS71000 历史 + wmic 抓的实际命令行
+        let cmdline = r#"I:\RED\LetsGoDevelop\ue4_tracking_rdcsp\Engine/Binaries/Win64/UE4Editor.exe I:\RED\LetsGoDevelop\LetsGo\RED.uproject -skipcompile -map=/Game/LetsGo/RuntimeLogicLevels/DS/LetsGo_MainLevel -server -log -nosteam -port=17777 -ds_game_type=121 -localds=71000 -startmode=1 -CustomMatchType=71000 -LOG=DSRED.log "-mwtitle=RED Local DS 71000""#;
+        let key = r#"-skipcompile -map=/Game/LetsGo/RuntimeLogicLevels/DS/LetsGo_MainLevel -server -log -nosteam -port=17777 -ds_game_type=121 -localds=71000 -startmode=1 -CustomMatchType=71000 -LOG=DSRED.log  "-mwtitle=RED Local DS 71000""#;
+        let rules = vec![HistoryLabelRule::single(key, "DS71000")];
+        assert_eq!(
+            find_history_label(cmdline, &rules).as_deref(),
+            Some("DS71000"),
+            "real-world DS71000 history->cmdline match must succeed"
+        );
+    }
+
+    #[test]
     fn label_match_must_not_contain() {
         // Editor: uproject ∧ ¬-server ∧ ¬-game
         let editor_rule = HistoryLabelRule {

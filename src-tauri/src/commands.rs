@@ -219,11 +219,29 @@ pub fn launch_process(
         msg
     })?;
 
-    // ── DS 模式：启动前清理同端口的旧 DS 进程，避免端口冲突 ──
-    // 端口判定：用户传入 req.port（>0）优先；否则按 UE 默认 7777
+    // ── DS 检测：启动前清理同端口的旧 DS 进程，避免端口冲突 ──
+    //
+    // 注意：用户在历史里有可能 mode 选的是 "Editor"，但在 extra_args 里手动加了
+    // `-server -port=...` 来跑 DS（这是 RED 项目的实际用法）。所以仅判断
+    // `req.mode == DedicatedServer` 会漏掉这种情况。
+    // 真实判定：mode 显式 DS  或  extra_args 里出现 -server / /server。
+    //
+    // 端口判定（按优先级）：
+    //   1) req.port > 0
+    //   2) 从 extra_args 解析 -port=NNNN / ?Port=NNNN / -Port NNNN
+    //   3) UE 默认 7777
     let mut replaced_pids: Vec<u32> = Vec::new();
-    if matches!(req.mode, LaunchMode::DedicatedServer) {
-        let target_port = if req.port > 0 { req.port } else { 7777 };
+    let extra_lower = req.extra_args.to_ascii_lowercase();
+    let extra_has_server = extra_lower
+        .split_whitespace()
+        .any(|tok| tok == "-server" || tok == "/server");
+    let is_ds_launch = matches!(req.mode, LaunchMode::DedicatedServer) || extra_has_server;
+    if is_ds_launch {
+        let target_port = if req.port > 0 {
+            req.port
+        } else {
+            crate::process::parse_port_from_cmdline(&req.extra_args).unwrap_or(7777)
+        };
         // 先做一次轻量 snapshot 让 monitor 内部 cmdline 缓存更新
         let _ = state.monitor.snapshot();
         let conflict_pids = state.monitor.find_ds_pids_by_port(target_port);
