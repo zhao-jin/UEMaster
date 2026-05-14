@@ -115,10 +115,10 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         style={{ boxShadow: selected ? "0 0 8px #00E5FF" : undefined }}
       />
 
-      {/* PRJ */}
-      <div className="truncate min-w-0">
+      {/* PRJ —— 项目名长则截断 */}
+      <div className="min-w-0 truncate text-left">
         {p.project_name ? (
-          <span className="text-accent-cyan font-semibold truncate" title={p.project_name}>
+          <span className="text-accent-cyan font-semibold" title={p.project_name}>
             {p.project_name}
           </span>
         ) : (
@@ -126,10 +126,11 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         )}
       </div>
 
-      {/* Name (launch label) — 列模板用 fit-content(120px)，短 label 自然宽，超长按 120px 截断 */}
-      <div className="overflow-hidden">
+      {/* Name (launch label) —— 列宽固定 96px，超长 label 在 span 内截断 */}
+      <div className="min-w-0 overflow-hidden text-left">
         {p.launch_label ? (
-          <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded
+          <span className="inline-block max-w-full truncate align-middle
+                           px-1.5 py-0.5 text-[10px] font-semibold rounded
                            bg-accent-purple/15 border border-accent-purple/40 text-accent-purple
                            whitespace-nowrap"
                 title={p.launch_label}>
@@ -140,32 +141,32 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         )}
       </div>
 
-      <div className="font-mono text-text-secondary">{p.pid}</div>
+      <div className="min-w-0 truncate font-mono text-text-secondary text-left">{p.pid}</div>
 
-      <div>
+      <div className="min-w-0 text-left">
         <span className={clsx(
-          "px-1.5 py-0.5 text-[9px] font-bold rounded border",
+          "px-1.5 py-0.5 text-[9px] font-bold rounded border whitespace-nowrap",
           KIND_COLORS[p.kind] ?? KIND_COLORS.Unknown
         )}>
           {KIND_SHORT[p.kind] ?? "?"}
         </span>
       </div>
 
-      <div className={clsx("font-mono", cpuColor)}>
+      <div className={clsx("min-w-0 truncate font-mono text-left", cpuColor)}>
         {p.cpu_percent.toFixed(1)}%
       </div>
-      <div className="font-mono text-text-secondary">
+      <div className="min-w-0 truncate font-mono text-text-secondary text-left">
         {fmtMem(p.mem_mb)}
       </div>
-      <div className={clsx("font-mono", ioColor)} title="I/O Bytes/s (Read+Write+Other)">
+      <div className={clsx("min-w-0 truncate font-mono text-left", ioColor)} title="I/O Bytes/s (Read+Write+Other)">
         {fmtIo(p.io_kbps)}
       </div>
-      <div className="font-mono text-text-secondary" title="Uptime">
+      <div className="min-w-0 truncate font-mono text-text-secondary text-left" title="Uptime">
         {fmtUptime(p.start_time)}
       </div>
 
       {/* Misc — 仅 DS 进程（命令行带 -server）显示端口；默认 7777 */}
-      <div className="truncate min-w-0 text-text-secondary font-mono text-[11px]">
+      <div className="min-w-0 truncate text-text-secondary font-mono text-[11px] text-left">
         {(() => {
           const isDS = p.kind === "DedicatedServer" || /(^|\s)-server(\s|$)/i.test(p.cmdline ?? "");
           if (!isDS) return <span className="text-text-dim">---</span>;
@@ -178,7 +179,7 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         })()}
       </div>
 
-      <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition">
+      <div className="min-w-0 flex items-center gap-1 justify-start opacity-70 group-hover:opacity-100 transition">
         <button
           onClick={handleOpenDir}
           className="w-6 h-6 flex items-center justify-center rounded
