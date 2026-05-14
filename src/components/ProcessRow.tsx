@@ -190,10 +190,13 @@ const ProcessRowInner = memo(function ProcessRowInner({ process: p, selected, on
         <button
           onClick={handleKill}
           className="w-6 h-6 flex items-center justify-center rounded
-                     hover:bg-accent-red/20 text-text-secondary hover:text-accent-red transition"
+                     bg-accent-red/15 border border-accent-red/40 text-accent-red
+                     hover:bg-accent-red/35 hover:border-accent-red/70
+                     hover:shadow-[0_0_6px_rgba(255,82,82,0.5)]
+                     transition"
           title="Kill process"
         >
-          <X size={12} />
+          <X size={12} strokeWidth={2.5} />
         </button>
       </div>
     </div>
