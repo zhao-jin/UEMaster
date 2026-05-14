@@ -57,16 +57,28 @@ export function StatBar({ processes }: Props) {
 
   return (
     <div className="h-9 flex items-center gap-2 px-3 text-[11px] border-t border-border-subtle bg-black/20">
-      {/* Close —— 隐藏到托盘（与 TitleBar 右上 X 等价，方便单手操作） */}
+      {/* Close —— 隐藏到托盘（与 TitleBar 右上 X 等价）。
+          默认就是红色，并以徽章形式标出当前 UE 进程数（0 时不显示数字、按钮淡出），
+          一眼能感知"有 N 个 UE 进程"且最近的关闭操作触手可及。 */}
       <button
         onClick={() => hideWindow()}
-        title="Hide to tray (Alt+`)"
-        className="h-6 w-6 flex items-center justify-center rounded-md
-                   text-text-secondary hover:text-accent-red hover:bg-accent-red/15
-                   border border-transparent hover:border-accent-red/40
+        title={
+          processes.length > 0
+            ? `Hide to tray (Alt+\`) — ${processes.length} UE process${processes.length === 1 ? "" : "es"} running`
+            : "Hide to tray (Alt+`)"
+        }
+        className="h-6 px-2 flex items-center gap-1 rounded-md
+                   bg-accent-red/15 hover:bg-accent-red/30
+                   border border-accent-red/40 hover:border-accent-red/70
+                   text-accent-red hover:shadow-[0_0_6px_rgba(255,82,82,0.45)]
                    transition-all"
       >
         <X size={12} strokeWidth={2.5} />
+        {processes.length > 0 && (
+          <span className="text-[10px] font-mono font-semibold opacity-90">
+            {processes.length}
+          </span>
+        )}
       </button>
 
       <div className="text-text-dim/40 ml-1">|</div>
