@@ -66,13 +66,9 @@ export function StatBar({ processes, onAfterAction }: Props) {
 
   return (
     <div className="h-9 flex items-center gap-2 px-3 text-[11px] border-t border-border-subtle bg-black/20">
-      {/* 左下角：UE 进程数 + Kill All + Close —— 高频操作集中区 */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-        <span className="text-text-secondary">{processes.length} processes</span>
-      </div>
-
-      {/* Kill All —— 紧挨进程数，红色显眼，0 个进程时灰显 */}
+      {/* 左下角：Kill All + Close —— 高频操作集中区。
+          UE 进程数已通过 Kill All 按钮里的数量徽章表达，无需再单独显示 "N processes"。 */}
+      {/* Kill All —— 红色显眼，0 个进程时灰显 */}
       <button
         onClick={handleKillAll}
         disabled={processes.length === 0}
