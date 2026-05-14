@@ -299,6 +299,14 @@ impl Monitor {
         self.history_label_version.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// 测试专用：直接用当前注入的 history_labels 跑一次匹配，便于在外层 crate 验证
+    /// `sync_history_labels` 生成的规则集是否正确。生产代码请勿调用。
+    #[doc(hidden)]
+    pub fn test_find_history_label(&self, cmdline: &str) -> Option<String> {
+        let rules = self.history_labels.lock();
+        find_history_label(cmdline, &rules)
+    }
+
     /// 拍一次快照（自动刷新）—— 推送给前端列表用，history 字段被截断到 PUSH_HISTORY_TAIL
     /// 节省 IPC 序列化和拷贝开销。详情页通过 `history_for_pid` 单独按 PID 拉全量。
     pub fn snapshot(&self) -> Vec<UeProcessInfo> {
