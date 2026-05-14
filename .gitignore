@@ -26,3 +26,5 @@ dist-portable/UEMaster-0.1.0-portable-win64.zip
 dist-portable/UEMaster-0.1.0-portable-win64/config.toml
 # Build artifacts in portable distribution dir (rebuilt locally, not source)
 dist-portable/*.exe
+# AI-generated icon source images (kept locally, not in git)
+src-tauri/icons/_gen/

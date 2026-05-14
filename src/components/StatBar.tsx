@@ -93,10 +93,6 @@ export function StatBar({ processes, onAfterAction }: Props) {
       )}
 
       <div className="flex-1" />
-      <span className="text-[10px] text-text-dim/70 italic select-none mr-2"
-            title="UEMaster by miles">
-        by miles
-      </span>
       <button
         onClick={handleKillAll}
         disabled={processes.length === 0}
