@@ -223,7 +223,7 @@ export default function App() {
             onAfterAction={refresh}
           />
         </div>
-        <StatBar processes={processes} onAfterAction={refresh} />
+        <StatBar processes={processes} />
       </div>
 
       {/* Splitter：放在主面板和详情面板之间 */}
