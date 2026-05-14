@@ -14,26 +14,19 @@ interface Props {
 }
 
 /**
- * 列模板 — 共享给表头和每一行，保持对齐。
- * 顺序：PRJ | Name | PID | Type | CPU | Memory | I/O | Uptime | Misc | Actions
+ * 整表共享的 grid 列模板。
+ * 顺序：Actions | PRJ | Name | Type | Uptime | CPU | Memory | Misc | PID
  *
- * 关键约束：每一行（ProcessRow）都是独立的 grid 容器，并不共享父级 grid 的 track
- * 计算结果。这意味着 max-content / fit-content 在每行都会"按本行内容"重新求值，
- * 导致同一逻辑列在不同行上出现宽度差（例如 Name="Editor" 与 Name="DS71001"）。
- *
- * 因此这里**所有列都使用边界明确的 minmax(min, max)**——min/max 都是显式像素值，
- * 让浏览器只在该范围内挑列宽且不依赖具体行内容；同时所有列内容靠左对齐，整表对齐。
- *
- * 单位放宽以容纳真实数据：
- *  - Name label 实测最长 "DS71001"≈68px 加 padding → 96px 上限够用
- *  - Memory 最长 "12.43 GB" ≈ 60px → 80px 上限
- *  - I/O 最长 "11.3 MB/s" ≈ 70px → 84px 上限
- *  - Uptime 最长 "9999d" / "23h 59m" ≈ 60px → 76px 上限
- *
- * 整表横向溢出由父容器 overflow-x-auto 兜底（窄窗时可滚）。
+ * 设计要点：
+ *  1) 整张表（表头 + 所有 ProcessRow）共用**同一个** grid 容器，每行通过 CSS subgrid
+ *     继承本列模板。这样 max-content / 1fr 在整表全局求值，不再像以前那样"每行各
+ *     自一个 grid"导致列宽错位。
+ *  2) 大部分列用 max-content，按整列最长内容自适应。Misc 用 1fr 吃掉剩余宽度，
+ *     PID 仍保留 max-content（它在最右，让数字紧靠右侧不浪费宽度）。
+ *  3) PRJ 设 minmax(56px, max-content)，下界保证空数据时也能撑出表头宽。
  */
 export const PROC_COLS =
-  "grid-cols-[minmax(56px,1fr)_96px_64px_72px_64px_80px_84px_76px_60px_64px]";
+  "grid-cols-[max-content_minmax(56px,max-content)_max-content_max-content_max-content_max-content_max-content_minmax(60px,1fr)_max-content]";
 
 export function ProcessList({ processes, selectedPid, onSelect, onClickOutsideRow, onAfterAction }: Props) {
   // onSelect/onAfterAction 对外引用稳定即可向下透传给 React.memo 的 ProcessRow
@@ -63,40 +56,55 @@ export function ProcessList({ processes, selectedPid, onSelect, onClickOutsideRo
 
   return (
     <div className="relative h-full overflow-y-auto overflow-x-auto" onClick={handleBgClick}>
-      {/* 表头 */}
-      <div className={`sticky top-0 z-10 grid ${PROC_COLS} gap-2
-                      px-3 py-2 text-[10px] uppercase tracking-wider text-text-dim text-left
-                      bg-bg-base/60 backdrop-blur border-b border-border-subtle`}>
-        <div>PRJ</div>
-        <div>Name</div>
-        <div>PID</div>
-        <div>Type</div>
-        <div>CPU</div>
-        <div>Memory</div>
-        <div>I/O</div>
-        <div>Uptime</div>
-        <div>Misc</div>
-        <div>Actions</div>
-      </div>
+      {/* 整表共享 grid —— 表头 + 每行通过 subgrid 共享列轨道，保证列宽全局对齐。
+          gap-x 控制列间距，行间距 gap-y=0（行间靠 border-bottom 分隔）。 */}
+      <div className={`grid ${PROC_COLS} gap-x-2`}>
+        {/* 表头：display:contents 让 9 个 cell 直接成为外层 grid 的子项；
+            sticky 由每个 cell 自己承担（统一 top-0），而不是 wrapper。 */}
+        <div className="contents">
+          {[
+            "Actions", "PRJ", "Name", "Type", "Uptime",
+            "CPU", "Memory", "Misc", "PID",
+          ].map((h, i) => (
+            <div
+              key={i}
+              className="sticky top-0 z-10 px-3 py-2
+                         text-[10px] uppercase tracking-wider text-text-dim text-left
+                         bg-bg-base/60 backdrop-blur border-b border-border-subtle
+                         first:pl-3 last:pr-3"
+            >
+              {h}
+            </div>
+          ))}
+        </div>
 
-      <AnimatePresence initial={false}>
-        {processes.map((p) => (
-          <motion.div
-            key={p.pid}
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 8 }}
-            transition={{ duration: 0.18 }}
-          >
-            <ProcessRow
-              process={p}
-              selected={selectedPid === p.pid}
-              onSelect={handleSelect}
-              onAfterAction={handleAfter}
-            />
-          </motion.div>
-        ))}
-      </AnimatePresence>
+        <AnimatePresence initial={false}>
+          {processes.map((p) => (
+            <motion.div
+              key={p.pid}
+              data-process-row
+              onClick={() => handleSelect(p.pid)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className={`group relative col-span-full grid grid-cols-subgrid gap-x-2 items-center
+                          py-2 text-xs border-b border-border-subtle/50 cursor-pointer
+                          transition-colors ${
+                            selectedPid === p.pid
+                              ? "bg-accent-cyan/10 hover:bg-accent-cyan/15"
+                              : "hover:bg-bg-rowHover"
+                          }`}
+            >
+              <ProcessRow
+                process={p}
+                selected={selectedPid === p.pid}
+                onAfterAction={handleAfter}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
