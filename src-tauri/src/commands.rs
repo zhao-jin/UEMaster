@@ -276,9 +276,12 @@ pub fn launch_process(
         pid, plan.program.display(), plan.args
     );
 
-    // 把 Label 绑到 PID，主界面列表会实时显示
+    // 把 Label 绑到 PID，主界面列表会实时显示；同时把 PID 立刻注册为已知 UE 进程，
+    // 避免要等 ~50s 全表扫描才出现在列表里 / labels 被 retain 清掉。
     if let Some(lbl) = req.label.as_deref().filter(|s| !s.is_empty()) {
         state.monitor.tag_launch(pid, lbl.to_string());
+    } else {
+        state.monitor.register_pid(pid);
     }
 
     // 历史已更新，重新同步历史 label 查找表（用户 rename / 新 label 都能立刻对老进程生效）

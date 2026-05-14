@@ -276,8 +276,19 @@ impl Monitor {
     }
 
     /// 绑定 label 到某个 PID（launch 成功后调用）
+    /// 给 PID 绑定 label 并注册为已知 UE 进程。
+    /// `launch_process` 启动新进程后调用，让该 PID 立刻参与下一轮增量 snapshot
+    /// （否则要等 ~50s 才会被全表扫描发现），同时绑定的 label 在 retain 阶段不会被清掉。
     pub fn tag_launch(&self, pid: u32, label: String) {
         self.labels.lock().insert(pid, label);
+        self.known_ue_pids.lock().insert(pid);
+    }
+
+    /// 仅注册 PID 为已知 UE 进程（不绑定 label）。
+    /// 用于"通过 NewProcessDialog 启动但用户没填 Name"的情况，让进程不必等 ~50s
+    /// 全表扫描才出现。
+    pub fn register_pid(&self, pid: u32) {
+        self.known_ue_pids.lock().insert(pid);
     }
 
     /// 用历史记录构建匹配规则表。
@@ -887,5 +898,29 @@ mod tests {
         // 3) Game cmdline（应该都不匹配，因为 Editor 规则排除 -game）
         let cmd_game = "UE4Editor.exe RED.uproject -game";
         assert_eq!(find_history_label(cmd_game, &rules), None);
+    }
+
+    #[test]
+    fn tag_launch_registers_pid_into_known() {
+        let m = Monitor::new();
+        // 模拟 launch_process: tag_launch 一个虚拟 PID
+        m.tag_launch(424242, "Editor".into());
+        let known: Vec<u32> = m.known_ue_pids.lock().iter().copied().collect();
+        assert!(
+            known.contains(&424242),
+            "tag_launch 必须把 PID 加入 known_ue_pids，否则下一轮 retain 会清掉 labels"
+        );
+        // labels 也要在
+        let labels = m.labels.lock();
+        assert_eq!(labels.get(&424242).map(|s| s.as_str()), Some("Editor"));
+    }
+
+    #[test]
+    fn register_pid_only_adds_to_known() {
+        let m = Monitor::new();
+        m.register_pid(727272);
+        assert!(m.known_ue_pids.lock().contains(&727272));
+        // 没 label
+        assert!(m.labels.lock().get(&727272).is_none());
     }
 }
