@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, PanelRight, PanelRightClose, Rocket, Pin, Settings as SettingsIcon, Skull } from "lucide-react";
+import { Plus, RefreshCw, PanelRight, PanelRightClose, Rocket, Pin, Settings as SettingsIcon } from "lucide-react";
 import clsx from "clsx";
 import {
-  type LaunchHistory, type ProjectPreset, type UeProcess,
-  listHistory, listProjects, launchProcess, killAll,
+  type LaunchHistory, type ProjectPreset,
+  listHistory, listProjects, launchProcess,
 } from "../lib/ipc";
 
 interface Props {
@@ -15,8 +15,6 @@ interface Props {
   onOpenSettings: () => void;
   /** 启动后的回调，例如刷新进程列表 */
   onLaunched?: () => void;
-  /** Kill All 用：当前 UE 进程列表 */
-  processes: UeProcess[];
 }
 
 /** Frecency 评分：与 NewProcessDialog 同口径 */
@@ -162,30 +160,6 @@ export function Toolbar(p: Props) {
         title={p.detailOpen ? "Hide details panel" : "Show details panel"}
       >
         {p.detailOpen ? <PanelRightClose size={14} /> : <PanelRight size={14} />}
-      </button>
-
-      {/* Kill All —— 显眼的红色按钮，仅有 UE 进程时可点 */}
-      <button
-        onClick={async () => {
-          if (p.processes.length === 0) return;
-          if (!confirm(`Kill ALL ${p.processes.length} UE processes? This cannot be undone.`)) return;
-          await killAll(p.processes.map(x => x.pid));
-          p.onLaunched?.();   // 复用刷新回调
-        }}
-        disabled={p.processes.length === 0}
-        title={p.processes.length === 0 ? "No UE processes" : `Kill all ${p.processes.length} UE processes`}
-        className="h-8 px-2.5 ml-1 flex items-center gap-1 rounded-md text-xs font-semibold
-                   bg-accent-red/15 hover:bg-accent-red/30 border border-accent-red/40 hover:border-accent-red/70
-                   text-accent-red hover:shadow-[0_0_8px_rgba(255,82,82,0.4)]
-                   disabled:opacity-25 disabled:cursor-not-allowed disabled:hover:bg-accent-red/15
-                   disabled:hover:border-accent-red/40 disabled:hover:shadow-none
-                   transition-all"
-      >
-        <Skull size={13} />
-        <span>Kill All</span>
-        {p.processes.length > 0 && (
-          <span className="text-[10px] font-mono opacity-80">{p.processes.length}</span>
-        )}
       </button>
     </div>
   );
