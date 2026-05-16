@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Cpu, MemoryStick, MonitorPlay, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { SystemStats, UeProcess } from "../lib/ipc";
-import { getSystemStats, hideWindow } from "../lib/ipc";
+import { getSystemStats, killAll } from "../lib/ipc";
 
 interface Props {
   processes: UeProcess[];
@@ -55,23 +55,44 @@ export function StatBar({ processes }: Props) {
       : `${sys.mem_used_mb}/${sys.mem_total_mb}M`)
     : undefined;
 
+  // Kill All —— 关闭所有 UE 进程（危险操作，需确认）
+  const handleKillAll = async () => {
+    if (processes.length === 0) return;
+    const confirmed = window.confirm(
+      `确定要关闭所有 ${processes.length} 个 UE 进程吗？\n\n此操作不可撤销。`
+    );
+    if (confirmed) {
+      try {
+        await killAll(processes.map(p => p.pid));
+      } catch (e) {
+        console.error("Failed to kill all processes:", e);
+      }
+    }
+  };
+
   return (
     <div className="h-9 flex items-center gap-2 px-3 text-[11px] border-t border-border-subtle bg-black/20">
-      {/* Close —— 隐藏到托盘（与 TitleBar 右上 X 等价）。
-          默认就是红色，并以徽章形式标出当前 UE 进程数（0 时不显示数字、按钮淡出），
-          一眼能感知"有 N 个 UE 进程"且最近的关闭操作触手可及。 */}
+      {/* Kill All —— 关闭所有 UE 进程 */}
       <button
-        onClick={() => hideWindow()}
+        onClick={handleKillAll}
+        disabled={processes.length === 0}
         title={
           processes.length > 0
-            ? `Hide to tray (Alt+\`) — ${processes.length} UE process${processes.length === 1 ? "" : "es"} running`
-            : "Hide to tray (Alt+`)"
+            ? `Kill all ${processes.length} UE process${processes.length === 1 ? "" : "es"}`
+            : "No UE processes to kill"
         }
-        className="h-6 px-2 flex items-center gap-1 rounded-md
-                   bg-accent-red/15 hover:bg-accent-red/30
-                   border border-accent-red/40 hover:border-accent-red/70
-                   text-accent-red hover:shadow-[0_0_6px_rgba(255,82,82,0.45)]
-                   transition-all"
+        className={
+          processes.length > 0
+            ? "h-6 px-2 flex items-center gap-1 rounded-md " +
+              "bg-accent-red/15 hover:bg-accent-red/30 " +
+              "border border-accent-red/40 hover:border-accent-red/70 " +
+              "text-accent-red hover:shadow-[0_0_6px_rgba(255,82,82,0.45)] " +
+              "transition-all cursor-pointer"
+            : "h-6 px-2 flex items-center gap-1 rounded-md " +
+              "bg-accent-red/5 border border-accent-red/20 " +
+              "text-accent-red/40 cursor-not-allowed " +
+              "transition-all"
+        }
       >
         <X size={12} strokeWidth={2.5} />
         {processes.length > 0 && (
