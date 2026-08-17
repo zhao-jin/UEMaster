@@ -154,6 +154,52 @@ pub fn rename_history(state: State<'_, AppState>, id: String, label: String) -> 
     Ok(())
 }
 
+/// 编辑历史条目（不修改 launch_count / last_used_at / created_at / env）
+#[derive(Debug, Deserialize)]
+pub struct HistoryUpdate {
+    pub id: String,
+    pub project_id: String,
+    pub mode: LaunchMode,
+    #[serde(default)]
+    pub map: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub extra_args: String,
+    #[serde(default)]
+    pub log_file: String,
+    #[serde(default)]
+    pub working_dir: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+#[tauri::command]
+pub fn update_history(state: State<'_, AppState>, patch: HistoryUpdate) -> Cmd<()> {
+    let mut cfg = state.config.lock();
+    let h = cfg.history.iter_mut().find(|h| h.id == patch.id);
+    match h {
+        Some(h) => {
+            h.project_id = patch.project_id;
+            h.mode = patch.mode;
+            h.map = patch.map;
+            h.port = patch.port;
+            h.extra_args = patch.extra_args;
+            h.log_file = patch.log_file;
+            h.working_dir = patch.working_dir;
+            h.label = patch.label;
+            h.pinned = patch.pinned;
+        }
+        None => return Err(format!("history id not found: {}", patch.id)),
+    }
+    cfg.save().map_err(err)?;
+    drop(cfg);
+    crate::sync_history_labels(&state.config, &state.monitor);
+    Ok(())
+}
+
 /* ───────── 启动进程 ───────── */
 
 #[derive(Debug, Deserialize)]

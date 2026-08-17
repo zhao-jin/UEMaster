@@ -170,6 +170,7 @@ pub fn run() {
             commands::toggle_pin,
             commands::remove_history,
             commands::rename_history,
+            commands::update_history,
             commands::launch_process,
             commands::hide_window,
             commands::get_settings,

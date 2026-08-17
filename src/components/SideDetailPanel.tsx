@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { UeProcess } from "../lib/ipc";
 import {
-  Terminal, FolderTree, ChevronRight, X, Rocket, Pin,
+  Terminal, FolderTree, ChevronRight, X, Rocket, Pin, Pencil, Trash2,
 } from "lucide-react";
 import { Sparkline } from "./Sparkline";
 import { RangeBrush } from "./RangeBrush";
+import { EditHistoryDialog } from "./EditHistoryDialog";
 import {
   type LaunchHistory, type ProjectPreset, type ProcessHistory,
-  listHistory, listProjects, launchProcess, getProcessHistory,
+  listHistory, listProjects, launchProcess, getProcessHistory, removeHistory,
 } from "../lib/ipc";
 
 interface Props {
@@ -86,6 +87,8 @@ function QuickLaunchPanel({ onLaunched }: { onLaunched?: () => void }) {
   const [history, setHistory] = useState<LaunchHistory[]>([]);
   const [projects, setProjects] = useState<ProjectPreset[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** 当前正在编辑的历史条目 id */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const reload = async () => {
     try {
@@ -134,6 +137,26 @@ function QuickLaunchPanel({ onLaunched }: { onLaunched?: () => void }) {
     }
   };
 
+  const handleQuickDelete = async (h: LaunchHistory, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!confirm(`Delete quick-launch button "${h.label}"?`)) return;
+    try {
+      await removeHistory(h.id);
+      await reload();
+    } catch (err) {
+      alert(`Delete failed: ${err}`);
+    }
+  };
+
+  const handleQuickEdit = (h: LaunchHistory, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setEditingId(h.id);
+  };
+
+  const editingHistory = editingId ? history.find(x => x.id === editingId) ?? null : null;
+
   if (items.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-text-dim text-xs px-4 text-center">
@@ -154,17 +177,14 @@ function QuickLaunchPanel({ onLaunched }: { onLaunched?: () => void }) {
         {items.map(h => {
           const isBusy = busyId === h.id;
           return (
-            <button
+            <div
               key={h.id}
-              onClick={() => fire(h)}
-              disabled={!!busyId}
-              title={`${h.label} · ${projName(h.project_id)} · ${h.mode}\n${h.extra_args || "(no args)"}\n${fmtAgo(h.last_used_at)} · ${h.launch_count}×`}
-              className={`group inline-flex items-center gap-1.5 px-2 py-1 rounded
+              className={`group relative inline-flex items-center gap-1.5 pl-2 pr-1 py-1 rounded
                           text-[11px] border transition-all max-w-full
                           ${isBusy
                             ? "bg-accent-cyan/10 border-accent-cyan/60 text-accent-cyan"
                             : "bg-black/20 border-border-subtle hover:border-accent-cyan/50 hover:bg-accent-cyan/10"}
-                          ${busyId && !isBusy ? "opacity-40 cursor-not-allowed" : ""}`}
+                          ${busyId && !isBusy ? "opacity-40" : ""}`}
             >
               {h.pinned ? (
                 <Pin size={10} className="text-accent-cyan fill-accent-cyan shrink-0" />
@@ -176,12 +196,49 @@ function QuickLaunchPanel({ onLaunched }: { onLaunched?: () => void }) {
                   }`}
                 />
               )}
-              <span className="font-semibold truncate text-text-primary max-w-[140px]">{h.label}</span>
+              <button
+                onClick={() => fire(h)}
+                disabled={!!busyId}
+                title={`${h.label} · ${projName(h.project_id)} · ${h.mode}\n${h.extra_args || "(no args)"}\n${fmtAgo(h.last_used_at)} · ${h.launch_count}×`}
+                className="font-semibold truncate text-text-primary max-w-[140px] disabled:cursor-not-allowed"
+              >
+                {h.label}
+              </button>
               <span className="text-[9px] font-mono text-accent-cyan/80 shrink-0">{projName(h.project_id)}</span>
-            </button>
+              {/* hover 时显示的编辑/删除小按钮 */}
+              <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                <button
+                  onClick={(e) => handleQuickEdit(h, e)}
+                  disabled={!!busyId}
+                  title="Edit parameters"
+                  className="w-4 h-4 flex items-center justify-center rounded
+                             text-text-dim hover:text-accent-cyan hover:bg-accent-cyan/15"
+                >
+                  <Pencil size={9} />
+                </button>
+                <button
+                  onClick={(e) => handleQuickDelete(h, e)}
+                  disabled={!!busyId}
+                  title="Delete this button"
+                  className="w-4 h-4 flex items-center justify-center rounded
+                             text-text-dim hover:text-accent-red hover:bg-accent-red/15"
+                >
+                  <Trash2 size={9} />
+                </button>
+              </div>
+            </div>
           );
         })}
       </div>
+
+      {/* 编辑对话框 */}
+      {editingHistory && (
+        <EditHistoryDialog
+          history={editingHistory}
+          onClose={() => setEditingId(null)}
+          onUpdated={reload}
+        />
+      )}
     </div>
   );
 }

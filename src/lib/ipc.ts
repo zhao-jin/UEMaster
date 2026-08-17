@@ -94,6 +94,22 @@ export const removeHistory = (id: string) => invoke<void>("remove_history", { id
 export const renameHistory = (id: string, label: string) =>
   invoke<void>("rename_history", { id, label });
 
+/** 编辑历史条目（不含 launch_count / last_used_at / created_at / env） */
+export interface HistoryUpdate {
+  id: string;
+  project_id: string;
+  mode: LaunchMode;
+  map?: string;
+  port?: number;
+  extra_args?: string;
+  log_file?: string;
+  working_dir?: string;
+  label?: string | null;
+  pinned?: boolean;
+}
+export const updateHistory = (patch: HistoryUpdate) =>
+  invoke<void>("update_history", { patch });
+
 // 启动
 export const launchProcess = (req: LaunchRequest) =>
   invoke<{ pid: number; history_id: string; replaced_pids: number[] }>("launch_process", { req });
